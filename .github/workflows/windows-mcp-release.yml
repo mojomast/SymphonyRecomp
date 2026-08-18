@@ -1,4 +1,4 @@
-name: Windows MCP Package
+name: MCP Packages
 
 on:
   workflow_dispatch:
@@ -10,6 +10,19 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64
+            asset: windows-x64
+            outputType: WinExe
+            archive: zip
+            file: SymphonyRecomp-mcp-v0.2.0-windows-x64.zip
+          - rid: linux-x64
+            asset: linux-x64
+            outputType: Exe
+            archive: tar
+            file: SymphonyRecomp-mcp-v0.2.0-linux-x64.tar.gz
     steps:
       - name: Checkout SymphonyRecomp
         uses: actions/checkout@v7
@@ -42,26 +55,26 @@ jobs:
       - name: Test automation components
         run: dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj -c Release
 
-      - name: Publish Windows game
+      - name: Publish game
         run: >
           dotnet publish RecompOne.SoTN.csproj -c Release
-          -r win-x64
+          -r ${{ matrix.rid }}
           --self-contained false
           -m:1
           -p:UseSharedCompilation=false
           -p:PublishSingleFile=false
           -p:PublishReadyToRun=false
-          -p:OutputType=WinExe
+          -p:OutputType=${{ matrix.outputType }}
           -p:UseRidGraph=true
-          -p:InformationalVersion=mcp-v0.1.0
+          -p:InformationalVersion=mcp-v0.2.0
           -p:NoWarn=0162
           -o package
 
-      - name: Publish Windows MCP companion
+      - name: Publish MCP companion
         run: >
           dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release
-          -r win-x64
-          --self-contained false
+          -r ${{ matrix.rid }}
+          --self-contained true
           -p:PublishSingleFile=false
           -p:PublishReadyToRun=false
           -p:UseRidGraph=true
@@ -71,15 +84,27 @@ jobs:
         run: |
           cp docs/mcp-automation.md package/MCP-AUTOMATION.md
           cp tools/SymphonyRecomp.Mcp/opencode.example.json package/mcp/opencode.example.json
+          cp tools/SymphonyRecomp.Mcp/opencode.remote.example.json package/mcp/opencode.remote.example.json
           if [ -d mods ]; then
             rsync -a --exclude '.git*' --exclude '.cache' mods/ package/mods/
           fi
 
-      - name: Create Windows archive
-        run: cd package && zip -r ../SymphonyRecomp-mcp-v0.1.0-windows-x64.zip .
+      - name: Bundle Linux launcher
+        if: matrix.rid == 'linux-x64'
+        run: |
+          cp run.sh package/run.sh
+          chmod +x package/run.sh package/sotn package/mcp/SymphonyRecomp.Mcp
 
-      - name: Upload Windows archive
+      - name: Create ZIP archive
+        if: matrix.archive == 'zip'
+        run: cd package && zip -r ../SymphonyRecomp-mcp-v0.2.0-windows-x64.zip .
+
+      - name: Create tar archive
+        if: matrix.archive == 'tar'
+        run: tar -czf SymphonyRecomp-mcp-v0.2.0-linux-x64.tar.gz -C package .
+
+      - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: SymphonyRecomp-mcp-v0.1.0-windows-x64
-          path: SymphonyRecomp-mcp-v0.1.0-windows-x64.zip
+          name: SymphonyRecomp-mcp-v0.2.0-${{ matrix.asset }}
+          path: ${{ matrix.file }}

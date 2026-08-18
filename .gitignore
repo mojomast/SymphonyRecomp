@@ -11,3 +11,4 @@ interface.ini
 debug_dump/
 disc/
 mods/.cache
+*.7z

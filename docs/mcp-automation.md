@@ -69,6 +69,55 @@ The game build references `SymphonyRecomp.Automation.Contracts.dll`. Release pac
 
 ## OpenCode Setup
 
+### Linux OpenCode To Windows Over Tailscale
+
+This is the recommended setup when OpenCode runs on Linux and the visible game runs on a Windows host. The companion runs in the logged-in Windows desktop session, launches `sotn.exe` there, and exposes MCP through Tailscale Serve.
+
+On Windows, open PowerShell in the extracted release directory and set the local paths plus the exact Tailscale HTTPS name:
+
+```powershell
+$env:SYMPHONYRECOMP_EXECUTABLE = "C:\SymphonyRecomp\sotn.exe"
+$env:SYMPHONYRECOMP_DISC = "C:\Games\SOTN\Castlevania - Symphony of the Night (USA).cue"
+$env:SYMPHONYRECOMP_WORKDIR = "C:\SymphonyRecomp"
+$env:SYMPHONYRECOMP_MCP_HTTP_HOST = "sotn-windows.example-tailnet.ts.net"
+$env:SYMPHONYRECOMP_MCP_HTTP_PORT = "8765"
+& ".\mcp\SymphonyRecomp.Mcp.exe" --http
+```
+
+The companion binds only `127.0.0.1:8765`. In a separate Administrator PowerShell, expose that loopback service to the tailnet using HTTPS:
+
+```powershell
+tailscale serve --bg --https=443 http://127.0.0.1:8765
+tailscale serve status --json
+```
+
+Do not use `tailscale funnel`; Funnel would expose the game-control API to the public internet.
+
+On Linux, configure OpenCode with the Tailscale HTTPS URL:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "symphonyrecomp": {
+      "type": "remote",
+      "url": "https://sotn-windows.example-tailnet.ts.net/mcp",
+      "oauth": false,
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+```
+
+No application token or OAuth setup is required. Tailscale authenticates devices and encrypts the connection. Anyone permitted by the tailnet policy to reach the Windows host on TCP 443 can invoke these tools, including destructive tools, so restrict that grant to the Linux development machine if the tailnet has other users or devices.
+
+The Windows companion must remain running in the interactive desktop session. `sotn_launch_game` then starts a visible Windows game process, while screenshots, telemetry, logs, input, resets, and mod reloads are controlled from Linux.
+
+Quit and restart OpenCode after changing `opencode.json`; MCP configuration is loaded only at startup.
+
+### Same-Machine Stdio
+
 OpenCode local MCP configuration uses `environment`, not `env`, and `command` must be an array. Add an entry to the appropriate `opencode.json` and use absolute paths for your machine:
 
 ```json
@@ -157,8 +206,9 @@ Never place the token in command-line arguments, checked-in configuration, URLs,
 
 ## Security Model
 
-- MCP uses stdio, so the companion opens no TCP or HTTP listener.
-- One companion process is one control authority for one configured game instance. Do not share the same stdio MCP process between independent hosts or mutually untrusted tasks.
+- The companion uses stdio by default. `--http` binds Streamable HTTP only to Windows loopback; Tailscale Serve is the tailnet-facing HTTPS listener.
+- HTTP mode accepts only exact `POST /mcp`, validates the configured Tailscale FQDN and any supplied Origin, applies Kestrel request/header/connection limits, and enables no CORS.
+- One companion process is one control authority for one configured game instance. Do not share it between independent hosts or mutually untrusted tasks.
 - Game IPC uses `NamedPipeServerStream` and `NamedPipeClientStream` with `CurrentUserOnly`.
 - Every internal request authenticates with a constant-time comparison of a per-launch token hash.
 - Requests are length-prefixed, size-limited, schema-validated, timeout-bounded, and serialized one at a time.
@@ -172,7 +222,7 @@ Never place the token in command-line arguments, checked-in configuration, URLs,
 - Destructive MCP tools carry explicit annotations and require `confirm=true` as an accidental-call guard. The boolean is model-supplied and is not proof of human consent; the MCP host must still show its normal tool-approval UI with the complete arguments.
 - The server only manages preinstalled mods. Mods are full-trust code; enabling one is equivalent to executing it as the current user.
 
-Treat the MCP server as a powerful local developer tool. Run it only with trusted MCP hosts and trusted mods.
+Treat the MCP server as a powerful developer tool. Use Tailscale Serve, never Funnel, and run it only with trusted MCP hosts, tailnet devices, and mods.
 
 ## Screenshot Semantics
 
@@ -198,7 +248,7 @@ Public tests require no game data:
 dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj
 ```
 
-They compile the game-side bridge against RecompOne with test SOTN wrappers and cover framed partial reads, oversized-frame rejection before allocation, EOF behavior, bounded logs, contradictory directions, neutral input, timeline limits, authenticated named-pipe round trips, response-ID mismatch handling, weak-token rejection, and authenticated bridge dispatch at VSync.
+They compile the game-side bridge against RecompOne with test SOTN wrappers and cover framed partial reads, oversized-frame rejection before allocation, EOF behavior, bounded logs, contradictory directions, neutral input, timeline limits, authenticated named-pipe round trips, response-ID mismatch handling, weak-token rejection, authenticated bridge dispatch at VSync, and HTTP Host/Origin/path/method fail-closed behavior.
 
 The fork's automation CI builds the MCP companion and runs these tests without private disc material. A complete private integration run should additionally verify process launch, startup-disc validation, both rendering paths, screenshots, input neutralization, mod reload, hard reset, memory bounds, and save loading through the normal UI.
 

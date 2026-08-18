@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "symphonyrecomp": {
+      "type": "remote",
+      "url": "https://sotn-windows.example-tailnet.ts.net/mcp",
+      "oauth": false,
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
