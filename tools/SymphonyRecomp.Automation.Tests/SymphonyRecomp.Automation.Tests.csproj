@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\RecompOne\RecompOne.Runtime\RecompOne.Runtime.csproj" UndefineProperties="OutputType" />
+    <ProjectReference Include="..\SymphonyRecomp.Automation.Contracts\SymphonyRecomp.Automation.Contracts.csproj" />
+    <ProjectReference Include="..\SymphonyRecomp.Mcp\SymphonyRecomp.Mcp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\automation\AutomationBridge.cs" Link="GameBridge\AutomationBridge.cs" />
+    <Compile Include="..\..\automation\AutomationGameThread.cs" Link="GameBridge\AutomationGameThread.cs" />
+  </ItemGroup>
+</Project>

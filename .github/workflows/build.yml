@@ -29,6 +29,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Test MCP automation components
+        run: dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj -c Release
+
       - name: Build recompiler
         run: dotnet build RecompOne/RecompOne.Recompiler/RecompOne.Recompiler.csproj -c Release
 
@@ -38,8 +41,13 @@ jobs:
       - name: Build SymphonyRecomp
         run: dotnet build RecompOne.SoTN.csproj -c Release -p:NoWarn=0162
 
+      - name: Publish MCP companion
+        run: dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release -o artifacts/mcp
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: symphony-recomp-build
-          path: bin/Release/net10.0/
+          path: |
+            bin/Release/net10.0/
+            artifacts/mcp/

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "symphonyrecomp": {
+      "type": "local",
+      "command": [
+        "dotnet",
+        "run",
+        "--project",
+        "C:\\src\\SymphonyRecomp\\tools\\SymphonyRecomp.Mcp\\SymphonyRecomp.Mcp.csproj",
+        "--no-build"
+      ],
+      "cwd": "C:\\src\\SymphonyRecomp",
+      "enabled": true,
+      "timeout": 30000,
+      "environment": {
+        "SYMPHONYRECOMP_EXECUTABLE": "C:\\src\\SymphonyRecomp\\bin\\Debug\\net10.0\\sotn.exe",
+        "SYMPHONYRECOMP_DISC": "C:\\Games\\SOTN\\Castlevania - Symphony of the Night (USA).cue",
+        "SYMPHONYRECOMP_WORKDIR": "C:\\src\\SymphonyRecomp\\bin\\Debug\\net10.0"
+      }
+    }
+  }
+}

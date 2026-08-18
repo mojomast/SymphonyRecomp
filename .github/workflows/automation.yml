@@ -1,0 +1,38 @@
+name: Automation
+
+on:
+  push:
+    branches: [mcp-automation]
+  pull_request:
+    branches: [mcp-automation]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SymphonyRecomp
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build RecompOne automation startup seam
+        run: |
+          dotnet build RecompOne/RecompOne.Runtime/RecompOne.Runtime.csproj -c Release
+          dotnet build RecompOne/RecompOne.Recompiler/RecompOne.Recompiler.csproj -c Release
+
+      - name: Test MCP automation components
+        run: dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj -c Release
+
+      - name: Publish MCP companion
+        run: dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release -o artifacts/mcp
+
+      - name: Upload MCP companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: symphony-recomp-mcp
+          path: artifacts/mcp/

@@ -131,6 +131,16 @@ jobs:
           -p:NoWarn=0162
           -o publish/${{ matrix.rid }}
 
+      - name: Publish MCP companion
+        run: >
+          dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release
+          -r ${{ matrix.rid }}
+          --self-contained false
+          -p:PublishSingleFile=false
+          -p:PublishReadyToRun=true
+          -p:UseRidGraph=true
+          -o publish/${{ matrix.rid }}/mcp
+
       - name: bundle cimgui (linux-arm64)
         if: matrix.rid == 'linux-arm64'
         uses: actions/download-artifact@v4

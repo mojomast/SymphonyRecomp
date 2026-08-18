@@ -1,5 +1,7 @@
 # Castlevania: Symphony of the Night PSX Recomp
 
+> **Automation fork:** The `mcp-automation` branch adds an opt-in, local-only development bridge and a standalone MCP server for automated testing. It is maintained in the `mojomast` fork and is not an upstream BlackLabelHQ feature. See [MCP Automation](docs/mcp-automation.md).
+
 The Castlevania: Symphony of the Night PlayStation Recomp, called SymphonyRecomp, is proudly brought to you by the BlackLabelHQ team! 
 
 # Please Read This
@@ -43,6 +45,19 @@ Clone repo. Add legally owned game files to disc. Run windows_run.bat or windows
 
 - [Visual Studio 2026](https://visualstudio.microsoft.com/downloads/) - More Ideal way to work with the project, you can also use VSCode.
 - [VSCode](https://code.visualstudio.com/)
+
+## MCP Development Automation
+
+This fork can launch a configured SymphonyRecomp build, drive controller input, inspect structured game/runtime state, capture screenshots, read bounded RAM, collect logs, inspect entities, and enable or reload existing mods through MCP. The bridge is disabled during ordinary play and listens only on a current-user named pipe when explicitly started with `--automation`.
+
+Build and test the standalone MCP companion:
+
+```bash
+dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj
+dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release -o artifacts/mcp
+```
+
+Configuration, security boundaries, tool documentation, save-loading workflow, and OpenCode examples are in [`docs/mcp-automation.md`](docs/mcp-automation.md).
 
 ## How Was This Made?
 This project was made using RecompOne to statically recompile the game, it also used some references from the decomp to help name functions and make patches, please show some love for the Decomp team, they deserve it!
