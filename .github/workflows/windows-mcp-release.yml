@@ -76,7 +76,7 @@ jobs:
           fi
 
       - name: Create Windows archive
-        run: zip -r SymphonyRecomp-mcp-v0.1.0-windows-x64.zip package
+        run: cd package && zip -r ../SymphonyRecomp-mcp-v0.1.0-windows-x64.zip .
 
       - name: Upload Windows archive
         uses: actions/upload-artifact@v7
