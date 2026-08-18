@@ -108,7 +108,7 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
                 ImageContentBlock.FromBytes(png, "image/png"),
                 new TextContentBlock { Text = JsonSerializer.Serialize(metadata, AutomationProtocol.Json) },
             ],
-            StructuredContent = JsonSerializer.SerializeToElement(metadata),
+            StructuredContent = JsonSerializer.SerializeToElement(metadata, AutomationProtocol.Json),
         };
     }
 
