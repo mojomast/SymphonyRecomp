@@ -11,12 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout SymphonyRecomp
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -32,7 +32,7 @@ jobs:
         run: dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release -o artifacts/mcp
 
       - name: Upload MCP companion
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: symphony-recomp-mcp
           path: artifacts/mcp/
