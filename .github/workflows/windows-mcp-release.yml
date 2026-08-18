@@ -1,0 +1,85 @@
+name: Windows MCP Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SymphonyRecomp
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download public v0.4.3b generated source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 31293910781 --repo BlackLabelHQ/SymphonyRecomp --name generated-source --dir generated
+
+      - name: Apply automation-aware generated entry
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("generated/Entry.cs")
+          text = path.read_text()
+          old = "        RecompOne.Runtime.Runtime.WaitForValidDisc();\n        using var fs = CueFs.Open(cuePath ?? RecompOne.Runtime.Runtime.CdPath);"
+          new = "        var activeCuePath = RecompOne.Runtime.Runtime.WaitForValidDisc(cuePath);\n        using var fs = CueFs.Open(activeCuePath);"
+          if old not in text:
+              raise SystemExit("generated Entry.cs did not match v0.4.3b")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Test automation components
+        run: dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj -c Release
+
+      - name: Publish Windows game
+        run: >
+          dotnet publish RecompOne.SoTN.csproj -c Release
+          -r win-x64
+          --self-contained false
+          -m:1
+          -p:UseSharedCompilation=false
+          -p:PublishSingleFile=false
+          -p:PublishReadyToRun=false
+          -p:OutputType=WinExe
+          -p:UseRidGraph=true
+          -p:InformationalVersion=mcp-v0.1.0
+          -p:NoWarn=0162
+          -o package
+
+      - name: Publish Windows MCP companion
+        run: >
+          dotnet publish tools/SymphonyRecomp.Mcp/SymphonyRecomp.Mcp.csproj -c Release
+          -r win-x64
+          --self-contained false
+          -p:PublishSingleFile=false
+          -p:PublishReadyToRun=false
+          -p:UseRidGraph=true
+          -o package/mcp
+
+      - name: Bundle documentation and mods
+        run: |
+          cp docs/mcp-automation.md package/MCP-AUTOMATION.md
+          cp tools/SymphonyRecomp.Mcp/opencode.example.json package/mcp/opencode.example.json
+          if [ -d mods ]; then
+            rsync -a --exclude '.git*' --exclude '.cache' mods/ package/mods/
+          fi
+
+      - name: Create Windows archive
+        run: zip -r SymphonyRecomp-mcp-v0.1.0-windows-x64.zip package
+
+      - name: Upload Windows archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: SymphonyRecomp-mcp-v0.1.0-windows-x64
+          path: SymphonyRecomp-mcp-v0.1.0-windows-x64.zip
