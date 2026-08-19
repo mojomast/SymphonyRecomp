@@ -16,4 +16,9 @@
   <ItemGroup>
     <ProjectReference Include="..\SymphonyRecomp.Automation.Contracts\SymphonyRecomp.Automation.Contracts.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Scenarios\Catalog\coop-locomotion-jump.json"
+                      LogicalName="SymphonyRecomp.Mcp.Scenarios.Catalog.coop-locomotion-jump.json" />
+  </ItemGroup>
 </Project>

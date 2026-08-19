@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Dispatch;
@@ -19,11 +21,13 @@ internal sealed class AutomationGameThread : IDisposable
     const int MaxScreenshotWidth = 1024;
     const int MaxScreenshotHeight = 512;
     const int MaxScreenshotPayload = 8 * 1024 * 1024;
+    const int MaxModDiagnosticsPayload = 64 * 1024;
 
     readonly Func<int> _pendingCount;
     readonly Func<int> _disconnectGeneration;
     readonly Stopwatch _uptime = Stopwatch.StartNew();
     readonly InputState[] _input = [new(), new()];
+    readonly ConcurrentDictionary<AutomationBridge.PendingCommand, byte> _deferred = new();
     int _seenDisconnectGeneration;
     IMemory? _seenMemory;
     long _frame;
@@ -66,13 +70,24 @@ internal sealed class AutomationGameThread : IDisposable
 
     public void Execute(AutomationBridge.PendingCommand pending)
     {
-        if (pending.Command.Method is "mods.set_enabled" or "mods.reload")
+        if (pending.Command.Method is "mods.set_enabled" or "mods.reload" or
+            "mods.diagnostics.capture" or "mods.diagnostics.reset")
         {
+            if (_disposed || !_deferred.TryAdd(pending, 0))
+            {
+                CancelDeferred(pending);
+                return;
+            }
             if (!RuntimeApi.TryEnqueueMainThreadAction(() =>
                 {
-                    if (pending.TryBeginExecution()) ExecuteNow(pending);
+                    try
+                    {
+                        if (!_disposed && pending.TryBeginExecution()) ExecuteNow(pending);
+                    }
+                    finally { _deferred.TryRemove(pending, out _); }
                 }))
             {
+                _deferred.TryRemove(pending, out _);
                 pending.Completion.TrySetResult(new AutomationResponse(
                     pending.Command.Id, false,
                     Error: new AutomationError("queue_full", "Runtime main-thread action queue is full.")));
@@ -94,6 +109,10 @@ internal sealed class AutomationGameThread : IDisposable
                 "mods.list" => ModsList(),
                 "mods.set_enabled" => SetMod((ModMutationRequest)pending.Command.Argument!),
                 "mods.reload" => ReloadMod((ModReloadRequest)pending.Command.Argument!),
+                "mods.diagnostics.capture" => CaptureModDiagnostics(
+                    (ModDiagnosticsCaptureRequest)pending.Command.Argument!),
+                "mods.diagnostics.reset" => ResetModDiagnostics(
+                    (ModDiagnosticsResetRequest)pending.Command.Argument!),
                 "logs.read" => Logs((int)pending.Command.Argument!),
                 "memory.read" => ReadMemory((MemoryReadRequest)pending.Command.Argument!),
                 "input.timeline" => SetTimeline((InputTimelineRequest)pending.Command.Argument!),
@@ -280,6 +299,67 @@ internal sealed class AutomationGameThread : IDisposable
         return new OperationResultDto(true, _frame, "Mod reloaded.");
     }
 
+    ModDiagnosticsDto CaptureModDiagnostics(ModDiagnosticsCaptureRequest request)
+    {
+        ModEntry mod = FindMod(request.Id);
+        if (!mod.Loaded) throw new SafeCommandException("invalid_state", "Mod is not loaded.");
+        string payload;
+        try
+        {
+            if (!ModLoader.TryCaptureAutomationDiagnostics(mod.Info.Id, _frame, out payload))
+                throw new SafeCommandException("unsupported", "Mod does not expose structured diagnostics.");
+        }
+        catch (SafeCommandException) { throw; }
+        catch { throw new SafeCommandException("provider_failed", "Mod diagnostics provider failed."); }
+        return ParseModDiagnostics(mod.Info.Id, _frame, payload);
+    }
+
+    ModDiagnosticsResetDto ResetModDiagnostics(ModDiagnosticsResetRequest request)
+    {
+        ModEntry mod = FindMod(request.Id);
+        if (!mod.Loaded) throw new SafeCommandException("invalid_state", "Mod is not loaded.");
+        try
+        {
+            if (!ModLoader.TryResetAutomationDiagnostics(mod.Info.Id, request.SessionId,
+                    request.ExpectedGeneration, out bool reset))
+                throw new SafeCommandException("unsupported", "Mod does not expose structured diagnostics.");
+            if (!reset)
+                throw new SafeCommandException("stale_diagnostic_identity",
+                    "Diagnostic session or generation no longer matches.");
+        }
+        catch (SafeCommandException) { throw; }
+        catch { throw new SafeCommandException("provider_failed", "Mod diagnostics provider failed."); }
+        return new ModDiagnosticsResetDto(mod.Info.Id, _frame, true);
+    }
+
+    internal static ModDiagnosticsDto ParseModDiagnostics(string id, long frame, string payload)
+    {
+        if (payload == null || Encoding.UTF8.GetByteCount(payload) > MaxModDiagnosticsPayload)
+            throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics exceeded the response limit.");
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics must be a JSON object.");
+            if (!document.RootElement.TryGetProperty("sessionId", out JsonElement sessionElement) ||
+                sessionElement.ValueKind != JsonValueKind.String || sessionElement.GetString() is not { } sessionId ||
+                sessionId.Length != 32 || !sessionId.All(Uri.IsHexDigit))
+                throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics had an invalid session identity.");
+            if (!document.RootElement.TryGetProperty("generation", out JsonElement generationElement) ||
+                !generationElement.TryGetInt32(out int generation) || generation < 0)
+                throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics had an invalid generation.");
+            var result = new ModDiagnosticsDto(id, frame, sessionId, generation, document.RootElement.Clone());
+            if (JsonSerializer.SerializeToUtf8Bytes(result, AutomationProtocol.Json).Length > MaxModDiagnosticsPayload)
+                throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics exceeded the response limit.");
+            return result;
+        }
+        catch (SafeCommandException) { throw; }
+        catch (JsonException)
+        {
+            throw new SafeCommandException("invalid_diagnostics", "Mod diagnostics were not valid JSON.");
+        }
+    }
+
     static ModEntry FindMod(string id) => ModLoader.Mods.FirstOrDefault(
         mod => string.Equals(mod.Info.Id, id, StringComparison.OrdinalIgnoreCase))
         ?? throw new SafeCommandException("not_found", "Mod was not found.");
@@ -424,7 +504,16 @@ internal sealed class AutomationGameThread : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        foreach (AutomationBridge.PendingCommand pending in _deferred.Keys)
+            CancelDeferred(pending);
         ClearInput();
+    }
+
+    internal static void CancelDeferred(AutomationBridge.PendingCommand pending)
+    {
+        if (pending.TryCancel())
+            pending.Completion.TrySetResult(new AutomationResponse(
+                pending.Command.Id, false, Error: new AutomationError("shutdown", "Automation bridge stopped.")));
     }
 
     sealed class InputState

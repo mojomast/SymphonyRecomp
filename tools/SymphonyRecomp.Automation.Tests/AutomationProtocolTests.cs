@@ -6,6 +6,9 @@ namespace SymphonyRecomp.Automation.Tests;
 public sealed class AutomationProtocolTests
 {
     [Fact]
+    public void StructuredDiagnosticsBumpProtocolVersion() => Assert.Equal("1.1", AutomationProtocol.Version);
+
+    [Fact]
     public async Task FrameRoundTripsAcrossPartialReads()
     {
         var expected = new AutomationRequest("request-1", "secret", "bridge.status", TimeoutMs: 1200);

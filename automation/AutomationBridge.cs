@@ -273,6 +273,8 @@ public sealed class AutomationBridge : IDisposable
             "memory.read" => ReadMemoryRequest(parameters),
             "mods.set_enabled" => ReadModMutation(parameters),
             "mods.reload" => ReadModReload(parameters),
+            "mods.diagnostics.capture" => ReadModDiagnosticsCapture(parameters),
+            "mods.diagnostics.reset" => ReadModDiagnosticsReset(parameters),
             "input.timeline" => ReadTimeline(parameters),
             "runtime.hard_reset" => ReadConfirmation(parameters),
             _ => throw new AutomationValidationException("Unknown automation method."),
@@ -315,6 +317,30 @@ public sealed class AutomationBridge : IDisposable
         var value = parameters!.Value.Deserialize<ModReloadRequest>(AutomationProtocol.Json)
             ?? throw new AutomationValidationException("Mod parameters are required.");
         ValidateModId(value.Id);
+        if (!value.Confirm) throw new AutomationValidationException("confirm must be true.");
+        return value;
+    }
+
+    static ModDiagnosticsCaptureRequest ReadModDiagnosticsCapture(JsonElement? parameters)
+    {
+        RequireProperties(parameters, ["id"], requireObject: true, requireAll: true);
+        var value = parameters!.Value.Deserialize<ModDiagnosticsCaptureRequest>(AutomationProtocol.Json)
+            ?? throw new AutomationValidationException("Mod diagnostics parameters are required.");
+        ValidateModId(value.Id);
+        return value;
+    }
+
+    static ModDiagnosticsResetRequest ReadModDiagnosticsReset(JsonElement? parameters)
+    {
+        RequireProperties(parameters, ["id", "sessionId", "expectedGeneration", "confirm"],
+            requireObject: true, requireAll: true);
+        var value = parameters!.Value.Deserialize<ModDiagnosticsResetRequest>(AutomationProtocol.Json)
+            ?? throw new AutomationValidationException("Mod diagnostics reset parameters are required.");
+        ValidateModId(value.Id);
+        if (value.SessionId == null || value.SessionId.Length != 32 || !value.SessionId.All(Uri.IsHexDigit))
+            throw new AutomationValidationException("sessionId must be exactly 32 hexadecimal characters.");
+        if (value.ExpectedGeneration < 0)
+            throw new AutomationValidationException("expectedGeneration must be nonnegative.");
         if (!value.Confirm) throw new AutomationValidationException("confirm must be true.");
         return value;
     }

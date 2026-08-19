@@ -1,21 +1,41 @@
-using System.Buffers.Binary;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SymphonyRecomp.Automation.Contracts;
+using SymphonyRecomp.Mcp.Scenarios;
 
 namespace SymphonyRecomp.Mcp;
 
 [McpServerToolType]
-public sealed partial class SotnTools(GameProcessManager process, GameAutomationClient client)
+public sealed partial class SotnTools
 {
-    private const int MaxScreenshotBytes = 8 * 1024 * 1024;
+    private readonly GameProcessManager process;
+    private readonly GameAutomationClient client;
+    private readonly ScenarioCatalog scenarios;
+    private readonly IScenarioExecutionService scenarioExecution;
+    private readonly ScenarioExecutionGate scenarioGate;
+
+    public SotnTools(GameProcessManager process, GameAutomationClient client,
+        ScenarioCatalog scenarios, IScenarioExecutionService scenarioExecution,
+        ScenarioExecutionGate scenarioGate)
+    {
+        this.process = process;
+        this.client = client;
+        this.scenarios = scenarios;
+        this.scenarioExecution = scenarioExecution;
+        this.scenarioGate = scenarioGate;
+    }
+
+    public SotnTools(GameProcessManager process, GameAutomationClient client)
+        : this(process, client, new ScenarioCatalog(),
+            new ScenarioExecutionService(new ScenarioAutomationClient(client, process),
+                new SystemScenarioClock()), new ScenarioExecutionGate()) { }
+
     private static readonly IReadOnlyDictionary<string, ushort> ButtonBits = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase)
     {
         ["L2"] = 0x0001, ["R2"] = 0x0002, ["L1"] = 0x0004, ["R1"] = 0x0008,
@@ -26,17 +46,21 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
 
     [McpServerTool(Name = "sotn_launch_game", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Launch the configured SymphonyRecomp executable with its configured disc and wait for the automation bridge to become ready. Paths are read only from server environment configuration.")]
-    public Task<ProcessStatusResult> LaunchGame(CancellationToken cancellationToken) =>
-        process.LaunchAsync(client, cancellationToken);
+    public async Task<ProcessStatusResult> LaunchGame(CancellationToken cancellationToken)
+    {
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await process.LaunchAsync(client, cancellationToken).ConfigureAwait(false);
+    }
 
     [McpServerTool(Name = "sotn_stop_game", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Stop only the game process launched by this MCP server. Requires confirm=true because unsaved game progress can be lost.")]
-    public Task<ProcessStatusResult> StopGame(
+    public async Task<ProcessStatusResult> StopGame(
         [Description("Must be true to stop the managed game process.")] bool confirm,
         CancellationToken cancellationToken)
     {
         RequireConfirmation(confirm);
-        return process.StopAsync(client, cancellationToken);
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await process.StopAsync(client, cancellationToken).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "sotn_process_status", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
@@ -95,10 +119,7 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
     public async Task<CallToolResult> CaptureScreenshot(CancellationToken cancellationToken)
     {
         ScreenshotDto screenshot = await client.CaptureScreenshotAsync(cancellationToken).ConfigureAwait(false);
-        byte[] png;
-        try { png = Convert.FromBase64String(screenshot.Base64Data); }
-        catch (FormatException) { throw new McpException("The game bridge returned invalid screenshot data."); }
-        ValidatePng(screenshot, png);
+        byte[] png = PngScreenshotValidator.DecodeAndValidate(screenshot);
         var metadata = new ScreenshotMetadata(screenshot.Frame, screenshot.Width, screenshot.Height,
             screenshot.MimeType, screenshot.Source, screenshot.Sha256, png.Length);
         return new CallToolResult
@@ -114,7 +135,7 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
 
     [McpServerTool(Name = "sotn_run_input", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Queue a bounded processed-pad input timeline. Button names are case-insensitive; an empty button array creates a neutral wait.")]
-    public Task<InputOperationDto> RunInput(
+    public async Task<InputOperationDto> RunInput(
         [Description("Controller port, either 0 or 1.")] [Range(0, 1)] int port,
         [Description("One to 120 input steps totaling no more than 1800 frames.")] [MinLength(1), MaxLength(120)] InputStep[] steps,
         CancellationToken cancellationToken)
@@ -131,12 +152,40 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
             if (total > 1800) throw new McpException("The input timeline cannot exceed 1800 frames.");
             segments[i] = new InputSegmentDto(ParseButtons(step.Buttons, i), step.Frames);
         }
-        return client.RunInputAsync(new InputTimelineRequest(port, segments), cancellationToken);
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.RunInputAsync(new InputTimelineRequest(port, segments), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "sotn_clear_input", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Immediately clear automation input on both controller ports.")]
-    public Task<OperationResultDto> ClearInput(CancellationToken cancellationToken) => client.ClearInputAsync(cancellationToken);
+    public async Task<OperationResultDto> ClearInput(CancellationToken cancellationToken)
+    {
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.ClearInputAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "sotn_run_scenario", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Run one embedded, bounded scenario by catalog ID. Requires confirm=true and does not launch, hard-reset, reload, or stop the game.")]
+    public async Task<ScenarioExecutionResult> RunScenario(
+        [Description("Embedded scenario catalog identifier.")] [MaxLength(64)] string id,
+        [Description("Must be true to run bounded controller input and reset scenario diagnostics.")] bool confirm,
+        CancellationToken cancellationToken)
+    {
+        string source = scenarios.GetSource(id);
+        RequireConfirmation(confirm);
+        using IDisposable lease = scenarioGate.TryEnterScenario();
+        try
+        {
+            return await scenarioExecution.RunAsync(source, cancellationToken).ConfigureAwait(false);
+        }
+        catch (McpException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            throw new McpException("Scenario execution failed before a bounded result could be produced.");
+        }
+    }
 
     [McpServerTool(Name = "sotn_list_entities", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("List active game entities, bounded to the requested maximum.")]
@@ -154,7 +203,7 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
 
     [McpServerTool(Name = "sotn_set_mod_enabled", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Enable or disable an existing mod. Requires confirm=true and cannot install a mod.")]
-    public Task<OperationResultDto> SetModEnabled(
+    public async Task<OperationResultDto> SetModEnabled(
         [Description("Existing mod identifier using letters, digits, period, underscore, or hyphen; maximum 128 characters.")] [MaxLength(128)] string id,
         [Description("True to enable the mod; false to disable it.")] bool enabled,
         [Description("Must be true to mutate mod state.")] bool confirm,
@@ -162,19 +211,53 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
     {
         RequireConfirmation(confirm);
         ValidateModId(id);
-        return client.SetModEnabledAsync(new ModMutationRequest(id, enabled, true), cancellationToken);
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.SetModEnabledAsync(new ModMutationRequest(id, enabled, true), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "sotn_reload_mod", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Reload an existing enabled mod. Requires confirm=true.")]
-    public Task<OperationResultDto> ReloadMod(
+    public async Task<OperationResultDto> ReloadMod(
         [Description("Existing mod identifier using letters, digits, period, underscore, or hyphen; maximum 128 characters.")] [MaxLength(128)] string id,
         [Description("Must be true to reload the mod.")] bool confirm,
         CancellationToken cancellationToken)
     {
         RequireConfirmation(confirm);
         ValidateModId(id);
-        return client.ReloadModAsync(new ModReloadRequest(id, true), cancellationToken);
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.ReloadModAsync(new ModReloadRequest(id, true), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "sotn_get_mod_diagnostics", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Capture a loaded mod's bounded structured diagnostics on the serialized game thread.")]
+    public Task<ModDiagnosticsDto> GetModDiagnostics(
+        [Description("Loaded mod identifier using letters, digits, period, underscore, or hyphen; maximum 128 characters.")] [MaxLength(128)] string id,
+        CancellationToken cancellationToken)
+    {
+        ValidateModId(id);
+        return client.CaptureModDiagnosticsAsync(new ModDiagnosticsCaptureRequest(id), cancellationToken);
+    }
+
+    [McpServerTool(Name = "sotn_reset_mod_diagnostics", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Generation-check and reset a loaded mod's diagnostics. Requires confirm=true; capture again afterward for the new identity.")]
+    public async Task<ModDiagnosticsResetDto> ResetModDiagnostics(
+        [Description("Loaded mod identifier using letters, digits, period, underscore, or hyphen; maximum 128 characters.")] [MaxLength(128)] string id,
+        [Description("Exact 32-character hexadecimal session identifier from the latest capture.")] [StringLength(32, MinimumLength = 32)] string sessionId,
+        [Description("Nonnegative diagnostic generation from the latest capture.")] [Range(0, int.MaxValue)] int expectedGeneration,
+        [Description("Must be true to reset diagnostics and transient mod state.")] bool confirm,
+        CancellationToken cancellationToken)
+    {
+        RequireConfirmation(confirm);
+        ValidateModId(id);
+        if (sessionId == null || !DiagnosticSessionPattern().IsMatch(sessionId))
+            throw new McpException("sessionId must be exactly 32 hexadecimal characters.");
+        if (expectedGeneration < 0) throw new McpException("expectedGeneration must be nonnegative.");
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.ResetModDiagnosticsAsync(
+            new ModDiagnosticsResetRequest(id, sessionId, expectedGeneration, true), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "sotn_get_logs", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
@@ -213,12 +296,13 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
 
     [McpServerTool(Name = "sotn_hard_reset", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Hard-reset the emulated console and clear automation input. Requires confirm=true because unsaved progress can be lost.")]
-    public Task<OperationResultDto> HardReset(
+    public async Task<OperationResultDto> HardReset(
         [Description("Must be true to hard-reset the emulated console.")] bool confirm,
         CancellationToken cancellationToken)
     {
         RequireConfirmation(confirm);
-        return client.HardResetAsync(cancellationToken);
+        using IDisposable lease = scenarioGate.TryEnterMutation();
+        return await client.HardResetAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static ushort ParseButtons(string[]? buttons, int stepIndex)
@@ -237,23 +321,6 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
         if ((mask & 0xA000) == 0xA000) throw new McpException($"steps[{stepIndex}] cannot press Left and Right together.");
         if ((mask & 0x5000) == 0x5000) throw new McpException($"steps[{stepIndex}] cannot press Up and Down together.");
         return mask;
-    }
-
-    private static void ValidatePng(ScreenshotDto screenshot, byte[] png)
-    {
-        ReadOnlySpan<byte> signature = [137, 80, 78, 71, 13, 10, 26, 10];
-        if (png.Length is < 24 or > MaxScreenshotBytes || !png.AsSpan(0, 8).SequenceEqual(signature)
-            || !png.AsSpan(12, 4).SequenceEqual("IHDR"u8))
-            throw new McpException("The game bridge returned an invalid or oversized PNG screenshot.");
-        int width = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4));
-        int height = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4));
-        if (width is <= 0 or > 1024 || height is <= 0 or > 512 || width != screenshot.Width || height != screenshot.Height)
-            throw new McpException("The game bridge returned invalid screenshot dimensions.");
-        if (!string.Equals(screenshot.MimeType, "image/png", StringComparison.OrdinalIgnoreCase))
-            throw new McpException("The game bridge returned an unsupported screenshot type.");
-        string hash = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
-        if (!string.Equals(hash, screenshot.Sha256, StringComparison.OrdinalIgnoreCase))
-            throw new McpException("The game bridge screenshot failed its integrity check.");
     }
 
     private static CombinedTelemetryDto SanitizeTelemetry(CombinedTelemetryDto value) =>
@@ -284,6 +351,9 @@ public sealed partial class SotnTools(GameProcessManager process, GameAutomation
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]*$", RegexOptions.CultureInvariant)]
     private static partial Regex ModIdPattern();
+
+    [GeneratedRegex("^[0-9A-Fa-f]{32}$", RegexOptions.CultureInvariant)]
+    private static partial Regex DiagnosticSessionPattern();
 }
 
 /// <summary>One processed-pad state held for a positive number of frames.</summary>

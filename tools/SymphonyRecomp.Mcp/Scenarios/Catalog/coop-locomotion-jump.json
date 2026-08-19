@@ -1,0 +1,56 @@
+{
+  "schema": "sotn-scenario/1",
+  "id": "coop-locomotion-jump",
+  "version": "1",
+  "description": "Exercise bounded Player 2 right, left, and normal jump locomotion.",
+  "modId": "coop-feasibility",
+  "timeoutMs": 30000,
+  "start": {
+    "timeoutFrames": 300,
+    "predicates": [
+      { "type": "game", "field": "state", "equals": "Play" },
+      { "type": "game", "field": "character", "equals": "Alucard" },
+      { "type": "game", "field": "loading", "equals": false },
+      { "type": "game", "field": "menuOpen", "equals": false },
+      { "type": "game", "field": "mapOpen", "equals": false },
+      { "type": "diagnostic", "schema": "p2d4/1", "field": "H", "result": "P" },
+      { "type": "diagnostic", "schema": "p2d4/1", "field": "K", "equals": "-" },
+      { "type": "diagnostic", "schema": "p2d4/1", "field": "E", "equals": "0" }
+    ]
+  },
+  "steps": [
+    {
+      "id": "locomotion-jump",
+      "inputs": [
+        {
+          "port": 0,
+          "timeline": [
+            { "buttons": [], "frames": 64 }
+          ]
+        },
+        {
+          "port": 1,
+          "timeline": [
+            { "buttons": ["Right"], "frames": 12 },
+            { "buttons": [], "frames": 4 },
+            { "buttons": ["Left"], "frames": 12 },
+            { "buttons": [], "frames": 4 },
+            { "buttons": ["Cross"], "frames": 1 },
+            { "buttons": [], "frames": 31 }
+          ]
+        }
+      ],
+      "checkpoint": {
+        "timeoutFrames": 300,
+        "predicates": [
+          { "type": "diagnostic", "schema": "p2d4/1", "field": "M", "result": "P" },
+          { "type": "diagnostic", "schema": "p2d4/1", "field": "E", "equals": "0" }
+        ]
+      }
+    }
+  ],
+  "artifacts": {
+    "onFailure": ["state", "diagnostics", "entities", "logs", "screenshot"],
+    "onSuccess": ["state", "diagnostics"]
+  }
+}

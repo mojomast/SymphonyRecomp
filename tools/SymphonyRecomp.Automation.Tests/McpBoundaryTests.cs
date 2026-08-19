@@ -86,10 +86,10 @@ public sealed class McpBoundaryTests
     {
         string[] expected =
         [
-            "sotn_capture_screenshot", "sotn_clear_input", "sotn_get_logs", "sotn_get_state",
-            "sotn_hard_reset", "sotn_launch_game", "sotn_list_entities", "sotn_list_mods",
-            "sotn_process_status", "sotn_read_memory", "sotn_reload_mod", "sotn_run_input",
-            "sotn_set_mod_enabled", "sotn_stop_game", "sotn_wait_for_state",
+            "sotn_capture_screenshot", "sotn_clear_input", "sotn_get_logs", "sotn_get_mod_diagnostics",
+            "sotn_get_state", "sotn_hard_reset", "sotn_launch_game", "sotn_list_entities", "sotn_list_mods",
+            "sotn_process_status", "sotn_read_memory", "sotn_reload_mod", "sotn_reset_mod_diagnostics",
+            "sotn_run_input", "sotn_run_scenario", "sotn_set_mod_enabled", "sotn_stop_game", "sotn_wait_for_state",
         ];
         McpServerToolAttribute[] tools = typeof(SotnTools)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
@@ -101,5 +101,28 @@ public sealed class McpBoundaryTests
 
         Assert.Equal(expected, tools.Select(tool => tool.Name));
         Assert.All(tools, tool => Assert.False(tool.OpenWorld));
+
+        McpServerToolAttribute scenario = Assert.Single(tools,
+            tool => tool.Name == "sotn_run_scenario");
+        Assert.False(scenario.ReadOnly);
+        Assert.True(scenario.Destructive);
+        Assert.False(scenario.Idempotent);
+    }
+
+    [Fact]
+    public async Task DiagnosticArgumentsAreRejectedBeforeBridgeAccess()
+    {
+        await using var process = new GameProcessManager();
+        await using var client = new GameAutomationClient();
+        var tools = new SotnTools(process, client);
+
+        await Assert.ThrowsAsync<McpException>(() =>
+            tools.GetModDiagnostics("bad/id", CancellationToken.None));
+        await Assert.ThrowsAsync<McpException>(() =>
+            tools.ResetModDiagnostics("coop", "not-a-session", 0, true, CancellationToken.None));
+        await Assert.ThrowsAsync<McpException>(() =>
+            tools.ResetModDiagnostics("coop", new string('a', 32), -1, true, CancellationToken.None));
+        await Assert.ThrowsAsync<McpException>(() =>
+            tools.ResetModDiagnostics("coop", new string('a', 32), 0, false, CancellationToken.None));
     }
 }

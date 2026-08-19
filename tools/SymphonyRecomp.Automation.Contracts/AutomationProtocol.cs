@@ -6,7 +6,7 @@ namespace SymphonyRecomp.Automation.Contracts;
 
 public static class AutomationProtocol
 {
-    public const string Version = "1.0";
+    public const string Version = "1.1";
     public const int MaxFrameBytes = 16 * 1024 * 1024;
 
     public static JsonSerializerOptions Json { get; } = new(JsonSerializerDefaults.Web)
@@ -224,6 +224,10 @@ public sealed record MemoryReadDto(uint Address, int Length, string Base64Data, 
 
 public sealed record ModMutationRequest(string Id, bool Enabled, bool Confirm);
 public sealed record ModReloadRequest(string Id, bool Confirm);
+public sealed record ModDiagnosticsCaptureRequest(string Id);
+public sealed record ModDiagnosticsResetRequest(string Id, string SessionId, int ExpectedGeneration, bool Confirm);
+public sealed record ModDiagnosticsDto(string Id, long Frame, string SessionId, int Generation, JsonElement Payload);
+public sealed record ModDiagnosticsResetDto(string Id, long Frame, bool Applied);
 public sealed record ConfirmRequest(bool Confirm);
 
 public sealed record InputTimelineRequest(int Port, InputSegmentDto[] Segments);

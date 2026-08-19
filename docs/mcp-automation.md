@@ -25,6 +25,8 @@ RecompOne runtime and typed SOTN wrappers
 
 MCP protocol parsing, process management, PNG validation, and response serialization stay outside the game process. Runtime, memory, mod, input, and GPU operations run on the game thread at a VSync boundary. PNG encoding happens after RGB pixels are copied away from emulated and GPU state.
 
+Automation protocol `1.1` also discovers optional mod diagnostics through the exact public convention methods `CaptureAutomationDiagnostics(long)` and `TryResetAutomationDiagnostics(string, int)`. RecompOne owns the resulting delegates, publishes them only after successful mod load, and removes them before unload so collectible mod assemblies are not retained. The bridge invokes them only through the serialized runtime main-thread queue.
+
 A normal dynamically compiled mod is not used as the control plane because mods load after disc validation, cannot launch the game, cannot safely disable or reload themselves, cannot discover newly installed mods, and do not expose a supported final-frame capture or main-thread RPC API.
 
 ## Capabilities
@@ -39,15 +41,39 @@ A normal dynamically compiled mod is not used as the control plane because mods 
 | `sotn_capture_screenshot` | Returns a validated PNG as MCP image content plus frame metadata. |
 | `sotn_run_input` | Queues a bounded controller timeline on port 0 or 1. |
 | `sotn_clear_input` | Immediately returns both automation ports to neutral. |
+| `sotn_run_scenario` | Runs one embedded bounded destructive scenario by catalog ID, resets diagnostics/transient state, and returns its result and artifact ID. Requires confirmation. |
 | `sotn_list_entities` | Returns bounded structured data for active native entities. |
 | `sotn_list_mods` | Lists discovered mods and load state. |
 | `sotn_set_mod_enabled` | Enables or disables an existing discovered mod. Requires confirmation. |
 | `sotn_reload_mod` | Reloads an existing enabled mod. Requires confirmation. |
+| `sotn_get_mod_diagnostics` | Captures a loaded participating mod's bounded JSON object with reset session and generation identity. |
+| `sotn_reset_mod_diagnostics` | Resets diagnostics only when the exact latest session and generation still match. Requires confirmation. |
 | `sotn_get_logs` | Returns bounded game/bridge logs and managed-process stdout/stderr. |
 | `sotn_read_memory` | Reads up to 4096 bytes from emulated RAM. No memory-write tool exists. |
 | `sotn_hard_reset` | Clears automation input and requests a hard reset. Requires confirmation. |
 
 Tool schemas explicitly reject additional unsafe behavior: there is no shell execution, arbitrary filesystem path argument, arbitrary game-function call, mod source upload, mod installation, memory write, instruction stepping, or purported full-machine savestate.
+
+## Embedded Scenarios
+
+`sotn_run_scenario` accepts only an ID from the MCP assembly's strict embedded catalog plus `confirm=true`. It accepts no filesystem path or inline source and never implicitly launches or stops the game, reloads a mod, or hard-resets the console. It is annotated destructive because it resets participating-mod diagnostics and transient state. Scenario entry fails immediately while another scenario or any direct launch, stop, input, input-clear, hard-reset, diagnostic-reset, or mod mutation is active; those direct mutations likewise fail immediately while a scenario runs. Direct mutation leases cover their complete awaited operations. The runner itself uses its private automation adapter, so its input, diagnostic reset, and final neutral-input cleanup are not blocked by that gate.
+
+Catalog entry `coop-locomotion-jump`, version `1` under schema `sotn-scenario/1`, is the canonical co-op locomotion/normal-jump check for mod ID `coop-feasibility`. It requires Play as Alucard, no loading/menu/map, active co-op hooks (`H=P`), exact diagnostic schema `p2d4/1`, no latched error (`E=0`), and `K=-`. The `K=-` predicate deliberately fails closed unless Pad 2/native-controller mode is active; it does not silently drive the mod's virtual-key mode. The scenario does not pin a stage or room and does not require coyote or buffered-jump completion.
+
+Its paired 64-frame timelines hold port 0 neutral while port 1 sends Right 12, neutral 4, Left 12, neutral 4, Cross 1, and neutral 31. Timeline starts are ordered but are not documented as an atomic or guaranteed same-frame two-port operation. Checkpoints capture telemetry and then diagnostics as separate serialized observations, not an atomic state/diagnostic snapshot; frame deadlines use the later observation. The post-input checkpoint requires `M=P`; input neutrality is independently enforced by the runner. A passing run requests `state` and `diagnostics`. Any failed, cancelled, indeterminate, or cleanup-failed run requests all five bounded artifacts: `state`, `diagnostics`, `entities`, `logs`, and `screenshot`.
+
+Example call:
+
+```json
+{
+  "id": "coop-locomotion-jump",
+  "confirm": true
+}
+```
+
+The structured response is the bounded `ScenarioExecutionResult`: `runId`, `artifactId`, runner outcome/first failed checkpoint/cleanup evidence, and the sanitized artifact manifest. After runner cleanup, all requested evidence captures and writes share one five-second budget; mandatory source and manifest writes each have a separate narrow bound. Bundles are written below `SYMPHONYRECOMP_SCENARIO_ARTIFACTS`, or `artifacts/scenarios` under the companion working directory when unset. Manifests expose hashes, file names, bounded diagnostics, and sanitized process/build identity rather than configured full paths or credentials. Failure bundles can contain gameplay state, mod diagnostics, logs, entity data, and a game-display screenshot; treat the artifact directory as private test evidence and review it before sharing. The catalog and bundles contain no disc or save data themselves, but captured runtime evidence may reveal gameplay or mod state. The runner attempts to clear both ports in `finally`; after interruption, call `sotn_clear_input` and verify that both masks and remaining-frame counts are zero.
+
+The private 2026-08-19 live smoke launched the managed game and loaded real mod `coop-feasibility` `v0.4.0`. From Play/Alucard with loading/menu/map false and `K=-`, `H=P`, `E=0`, an exact diagnostic reset advanced generation `0` to `1`. The canonical Port 2 sequence above, with Port 0 neutral also exercised, produced `M=P:18/18/1`, `H=P`, `E=0`, and normal-jump-only `J=W:N1/C0/B0/R0,0` at automation frame 1912. Manual inter-tool latency means this observation does not prove same-frame port starts. State, diagnostics, at most 32 entities, 100 log lines, and a validated PNG were captured privately; no live bundle, image, or save was committed. Explicit clear at frame 2072 was followed by frame 2160 telemetry showing zero masks and zero remaining frames on both ports.
 
 ## Build
 
@@ -157,7 +183,7 @@ Quit and restart OpenCode after changing `opencode.json`; MCP configuration is l
 1. Call `sotn_process_status` and verify the configured executable and disc are available.
 2. Call `sotn_launch_game`.
 3. Call `sotn_get_state` and `sotn_capture_screenshot`.
-4. Use `sotn_run_input` with explicit pressed and neutral segments.
+4. Use `sotn_run_scenario` for the canonical co-op check, or `sotn_run_input` with explicit pressed and neutral segments.
 5. Use `sotn_wait_for_state` instead of fixed sleeps whenever possible.
 6. Call `sotn_clear_input` after an interrupted workflow.
 7. Gather `sotn_get_logs`, `sotn_get_state`, and a screenshot when reporting a failure.
@@ -214,6 +240,8 @@ Never place the token in command-line arguments, checked-in configuration, URLs,
 - Requests are length-prefixed, size-limited, schema-validated, timeout-bounded, and serialized one at a time.
 - The game queue holds at most 32 commands and drains at most eight per VSync.
 - Runtime state is accessed only on the game thread.
+- Mod diagnostics responses must be JSON objects with a 32-hex session ID and nonnegative generation; the final structured response is bounded to 64 KiB.
+- Diagnostic reset is destructive, generation-checked, and returns only whether reset applied. Capture again to obtain the new identity.
 - Screenshot GPU readback occurs only on the render/game thread; PNG encoding occurs off-thread.
 - Controller state is released on clear, disconnect, reset, timeout-before-execution, and bridge shutdown.
 - Logs and tool errors redact configured paths and tokens.
@@ -248,7 +276,7 @@ Public tests require no game data:
 dotnet test tools/SymphonyRecomp.Automation.Tests/SymphonyRecomp.Automation.Tests.csproj
 ```
 
-They compile the game-side bridge against RecompOne with test SOTN wrappers and cover framed partial reads, oversized-frame rejection before allocation, EOF behavior, bounded logs, contradictory directions, neutral input, timeline limits, authenticated named-pipe round trips, response-ID mismatch handling, weak-token rejection, authenticated bridge dispatch at VSync, and HTTP Host/Origin/path/method fail-closed behavior.
+They compile the game-side bridge against RecompOne with test SOTN wrappers and cover framed partial reads, oversized-frame rejection before allocation, EOF behavior, bounded logs, contradictory directions, neutral input, timeline limits, authenticated named-pipe round trips, response-ID mismatch handling, weak-token rejection, authenticated bridge dispatch at VSync, mod diagnostics convention discovery, reset identity transport, scenario parsing/running/artifacts/catalog boundaries, mutation-gate races, final response bounds, deferred-command shutdown, and HTTP Host/Origin/path/method fail-closed behavior. The final Release suite passed 88/88, and the full host Release build completed with zero warnings.
 
 The fork's automation CI builds the MCP companion and runs these tests without private disc material. A complete private integration run should additionally verify process launch, startup-disc validation, both rendering paths, screenshots, input neutralization, mod reload, hard reset, memory bounds, and save loading through the normal UI.
 

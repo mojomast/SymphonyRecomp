@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 using SymphonyRecomp.Mcp;
+using SymphonyRecomp.Mcp.Scenarios;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -51,6 +52,15 @@ static IMcpServerBuilder AddMcpServices(IServiceCollection services)
 {
     services.AddSingleton<GameProcessManager>();
     services.AddSingleton<GameAutomationClient>();
+    services.AddSingleton<ScenarioAutomationClient>();
+    services.AddSingleton<IScenarioAutomationClient>(provider =>
+        provider.GetRequiredService<ScenarioAutomationClient>());
+    services.AddSingleton<IScenarioClock, SystemScenarioClock>();
+    services.AddSingleton<ScenarioCatalog>();
+    services.AddSingleton<ScenarioExecutionGate>();
+    services.AddSingleton<ScenarioExecutionService>();
+    services.AddSingleton<IScenarioExecutionService>(provider =>
+        provider.GetRequiredService<ScenarioExecutionService>());
     var toolJson = new JsonSerializerOptions(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,

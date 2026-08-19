@@ -1,6 +1,7 @@
 using SymphonyRecomp.Automation;
 using SymphonyRecomp.Mcp;
 using RecompOne.Runtime.Events;
+using SymphonyRecomp.Automation.Contracts;
 
 namespace SymphonyRecomp.Automation.Tests;
 
@@ -54,5 +55,52 @@ public sealed class BridgeConstructionTests
             new AutomationBridge.AutomationCommand("b", "bridge.status", null, 1000));
         Assert.True(executing.TryBeginExecution());
         Assert.False(executing.TryCancel());
+    }
+
+    [Fact]
+    public async Task DisposingGameThreadCancelsDeferredMutation()
+    {
+        var gameThread = new AutomationGameThread(static () => 0, static () => 0);
+        var pending = new AutomationBridge.PendingCommand(new AutomationBridge.AutomationCommand(
+            "reset", "mods.diagnostics.reset",
+            new ModDiagnosticsResetRequest("coop", new string('a', 32), 0, true), 1000));
+
+        gameThread.Execute(pending);
+        gameThread.Dispose();
+        AutomationResponse response = await pending.Completion.Task;
+
+        Assert.False(response.Success);
+        Assert.Equal("shutdown", response.Error?.Code);
+        Assert.False(pending.TryBeginExecution());
+    }
+
+    [Fact]
+    public void DeferredCancellationDoesNotMisreportExecutingMutation()
+    {
+        var pending = new AutomationBridge.PendingCommand(new AutomationBridge.AutomationCommand(
+            "reset", "mods.diagnostics.reset",
+            new ModDiagnosticsResetRequest("coop", new string('a', 32), 0, true), 1000));
+        Assert.True(pending.TryBeginExecution());
+
+        AutomationGameThread.CancelDeferred(pending);
+
+        Assert.False(pending.Completion.Task.IsCompleted);
+    }
+
+    [Fact]
+    public void StructuredDiagnosticsRequireResetIdentityAndFinalBound()
+    {
+        string session = new('a', 32);
+        string valid = $$"""{"sessionId":"{{session}}","generation":3,"schema":"p2d4/1"}""";
+
+        ModDiagnosticsDto parsed = AutomationGameThread.ParseModDiagnostics("coop", 42, valid);
+
+        Assert.Equal(session, parsed.SessionId);
+        Assert.Equal(3, parsed.Generation);
+        Assert.Equal(42, parsed.Frame);
+        Assert.ThrowsAny<Exception>(() => AutomationGameThread.ParseModDiagnostics("coop", 42, "{}"));
+
+        string expanding = $$"""{"sessionId":"{{session}}","generation":3,"data":"{{new string('é', 11_000)}}"}""";
+        Assert.ThrowsAny<Exception>(() => AutomationGameThread.ParseModDiagnostics("coop", 42, expanding));
     }
 }

@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Reflection;
+using SymphonyRecomp.Automation.Contracts;
 
 namespace SymphonyRecomp.Mcp;
 
@@ -121,6 +123,31 @@ public sealed class GameProcessManager : IAsyncDisposable
     }
 
     public string[] GetProcessLogs(int maximum) => _logs.Snapshot(maximum, Sanitize);
+
+    public async Task<ScenarioBuildIdentity> GetBuildIdentityAsync(GameAutomationClient client,
+        CancellationToken cancellationToken)
+    {
+        ProcessStatusResult status = GetStatus(client);
+        string? sha256 = null;
+        if (status.ExecutableAvailable && _executable is not null)
+        {
+            try
+            {
+                await using FileStream stream = new(_executable, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                sha256 = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken)
+                    .ConfigureAwait(false)).ToLowerInvariant();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        }
+
+        string mcpVersion = typeof(GameProcessManager).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(GameProcessManager).Assembly.GetName().Version?.ToString() ?? "unknown";
+        string processStatus = status.Running ? "running" : status.Launched ? "exited" : "not-launched";
+        return new ScenarioBuildIdentity(status.ExecutableFileName, sha256, mcpVersion,
+            AutomationProtocol.Version, status.ProcessId, processStatus);
+    }
 
     public string SanitizeLogLine(string value)
     {
@@ -274,3 +301,12 @@ public sealed record ProcessStatusResult(
     string? ExecutableFileName,
     string? DiscFileName,
     string? WorkDirectoryName);
+
+/// <summary>Reproducibility identity without configured host paths or credentials.</summary>
+public sealed record ScenarioBuildIdentity(
+    string? ExecutableFileName,
+    string? ExecutableSha256,
+    string McpInformationalVersion,
+    string ProtocolVersion,
+    int? ProcessId,
+    string ProcessStatus);

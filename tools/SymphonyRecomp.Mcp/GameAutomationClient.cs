@@ -74,9 +74,9 @@ public sealed class GameAutomationClient : IAsyncDisposable
                 if (status.Ready && status.ProtocolVersion == AutomationProtocol.Version)
                     return;
             }
-            catch (McpException) when (!IsConnected)
+            catch (McpException ex) when (!IsConnected || IsStartupQueueTimeout(ex))
             {
-                // The game may still be creating its pipe during startup.
+                // The pipe can accept requests before the game-thread command queue starts.
             }
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
         }
@@ -94,6 +94,12 @@ public sealed class GameAutomationClient : IAsyncDisposable
         CallReadyAsync<OperationResultDto>("mods.set_enabled", request, 5000, token);
     public Task<OperationResultDto> ReloadModAsync(ModReloadRequest request, CancellationToken token) =>
         CallReadyAsync<OperationResultDto>("mods.reload", request, 5000, token);
+    public Task<ModDiagnosticsDto> CaptureModDiagnosticsAsync(ModDiagnosticsCaptureRequest request,
+        CancellationToken token) =>
+        CallReadyAsync<ModDiagnosticsDto>("mods.diagnostics.capture", request, 5000, token);
+    public Task<ModDiagnosticsResetDto> ResetModDiagnosticsAsync(ModDiagnosticsResetRequest request,
+        CancellationToken token) =>
+        CallReadyAsync<ModDiagnosticsResetDto>("mods.diagnostics.reset", request, 5000, token);
     public Task<LogSnapshotDto> GetLogsAsync(int lines, CancellationToken token) =>
         CallReadyAsync<LogSnapshotDto>("logs.read", new { lines }, 5000, token);
     public Task<MemoryReadDto> ReadMemoryAsync(MemoryReadRequest request, CancellationToken token) =>
@@ -290,6 +296,9 @@ public sealed class GameAutomationClient : IAsyncDisposable
         string message = Sanitize(error?.Message, "The game bridge rejected the request.", 256, code: false);
         return new McpException($"Game bridge error ({code}): {message}");
     }
+
+    private static bool IsStartupQueueTimeout(McpException error) =>
+        error.Message.StartsWith("Game bridge error (timeout):", StringComparison.Ordinal);
 
     private static string Sanitize(string? value, string fallback, int maximum, bool code)
     {

@@ -48,7 +48,7 @@ Clone repo. Add legally owned game files to disc. Run windows_run.bat or windows
 
 ## MCP Development Automation
 
-This fork can launch a configured SymphonyRecomp build, drive controller input, inspect structured game/runtime state, capture screenshots, read bounded RAM, collect logs, inspect entities, and enable or reload existing mods through MCP. The bridge is disabled during ordinary play and listens only on a current-user named pipe when explicitly started with `--automation`. The companion also supports loopback-only Streamable HTTP behind Tailscale Serve so OpenCode on Linux can control a visible game on Windows.
+This fork can launch a configured SymphonyRecomp build, drive controller input, inspect structured game/runtime state and participating mod diagnostics, capture screenshots, read bounded RAM, collect logs, inspect entities, and enable or reload existing mods through MCP. The bridge is disabled during ordinary play and listens only on a current-user named pipe when explicitly started with `--automation`. The companion also supports loopback-only Streamable HTTP behind Tailscale Serve so OpenCode on Linux can control a visible game on Windows.
 
 Build and test the standalone MCP companion:
 

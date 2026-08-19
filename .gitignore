@@ -2,6 +2,7 @@ bin/
 obj/
 publish/
 generated/
+artifacts/
 disc/
 *.sav
 settings.json
