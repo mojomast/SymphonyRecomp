@@ -8,6 +8,7 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SymphonyRecomp.Automation.Contracts;
 using SymphonyRecomp.Mcp.Scenarios;
+using SymphonyRecomp.Mcp.Campaigns;
 
 namespace SymphonyRecomp.Mcp;
 
@@ -19,17 +20,26 @@ public sealed partial class SotnTools
     private readonly ScenarioCatalog scenarios;
     private readonly IScenarioExecutionService scenarioExecution;
     private readonly ScenarioExecutionGate scenarioGate;
+    private readonly CampaignService campaigns;
 
     public SotnTools(GameProcessManager process, GameAutomationClient client,
         ScenarioCatalog scenarios, IScenarioExecutionService scenarioExecution,
-        ScenarioExecutionGate scenarioGate)
+        ScenarioExecutionGate scenarioGate, CampaignService campaigns)
     {
         this.process = process;
         this.client = client;
         this.scenarios = scenarios;
         this.scenarioExecution = scenarioExecution;
         this.scenarioGate = scenarioGate;
+        this.campaigns = campaigns;
     }
+
+    public SotnTools(GameProcessManager process, GameAutomationClient client,
+        ScenarioCatalog scenarios, IScenarioExecutionService scenarioExecution,
+        ScenarioExecutionGate scenarioGate)
+        : this(process, client, scenarios, scenarioExecution, scenarioGate,
+            new CampaignService(new ScenarioAutomationClient(client, process), new CampaignCatalog(),
+                scenarioGate, new SystemCampaignClock())) { }
 
     public SotnTools(GameProcessManager process, GameAutomationClient client)
         : this(process, client, new ScenarioCatalog(),
@@ -186,6 +196,29 @@ public sealed partial class SotnTools
             throw new McpException("Scenario execution failed before a bounded result could be produced.");
         }
     }
+
+    [McpServerTool(Name = "sotn_start_campaign", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Start one embedded observer campaign against an already-running manually prepared Play session. Returns quickly, never drives gameplay input, and requires confirm=true.")]
+    public async Task<CampaignStatus> StartCampaign(
+        [Description("Embedded campaign ID: coop-route-25 or coop-soak-60m.")] [MaxLength(64)] string id,
+        [Description("Must be true to begin private background evidence observation.")] bool confirm,
+        CancellationToken cancellationToken)
+    {
+        try { return await campaigns.StartCampaignAsync(id, confirm, cancellationToken).ConfigureAwait(false); }
+        catch (McpException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch { throw new McpException("Campaign start failed before observation began."); }
+    }
+
+    [McpServerTool(Name = "sotn_get_campaign", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Get bounded status and progress for the current or most recently completed observer campaign.")]
+    public CampaignStatus GetCampaign() => campaigns.GetStatus();
+
+    [McpServerTool(Name = "sotn_cancel_campaign", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Cancel the running observer campaign and finalize neutral-input cleanup. Requires confirm=true.")]
+    public Task<CampaignStatus> CancelCampaign(
+        [Description("Must be true to cancel the running campaign.")] bool confirm,
+        CancellationToken cancellationToken) => campaigns.CancelAsync(confirm, cancellationToken);
 
     [McpServerTool(Name = "sotn_list_entities", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("List active game entities, bounded to the requested maximum.")]

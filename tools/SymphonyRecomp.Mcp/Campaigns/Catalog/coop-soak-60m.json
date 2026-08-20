@@ -1,0 +1,14 @@
+{
+  "schema": "sotn-campaign/1",
+  "id": "coop-soak-60m",
+  "version": "1",
+  "kind": "soak",
+  "modId": "coop-feasibility",
+  "soakVersion": "ordinary-gameplay-60m/1",
+  "requiredSeconds": 3600,
+  "sampleSeconds": 300,
+  "sampleCount": 13,
+  "graceSeconds": 30,
+  "pollMilliseconds": 1000,
+  "noProgressSeconds": 10
+}

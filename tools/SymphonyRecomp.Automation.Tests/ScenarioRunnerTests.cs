@@ -273,7 +273,7 @@ public sealed class ScenarioRunnerTests
     {
         var fake = new ScriptedClient
         {
-            Status = new BridgeStatusDto("1.0", true, 9, 1, "Running", "Play", "CEN", 0, false),
+            Status = new BridgeStatusDto("1.1", true, 9, 1, "Running", "Play", "CEN", 0, false),
         };
 
         ScenarioRunResult result = await Run(fake, Scenario());
@@ -281,6 +281,102 @@ public sealed class ScenarioRunnerTests
         Assert.Equal(ScenarioRunOutcome.Failed, result.Outcome);
         Assert.Empty(fake.DiagnosticsSeen);
         Assert.Equal(1, fake.ClearCalls);
+    }
+
+    [Fact]
+    public async Task V2NonePreservesIdentityAndUsesOneAtomicDualPortBatch()
+    {
+        ScenarioDefinition scenario = ScenarioParser.Parse("""
+            {"schema":"sotn-scenario/2","id":"v2-run","version":"1","description":"v2 runner","modId":"coop","timeoutMs":30000,"diagnosticsReset":"none","start":{"timeoutFrames":20,"predicates":[{"type":"metric","schema":"p2d4/2","name":"errorCode","operator":"eq","value":"0"}]},"steps":[{"id":"dual","inputs":[{"port":0,"timeline":[{"buttons":["Down"],"frames":1}]},{"port":1,"timeline":[{"buttons":["Circle"],"frames":1}]}],"checkpoint":{"timeoutFrames":20,"predicates":[{"type":"metric","schema":"p2d4/2","name":"healthHp","operator":"gte","value":50}]}}],"artifacts":{"onFailure":[],"onSuccess":[]}}
+            """);
+        var fake = new ScriptedClient();
+        foreach (long frame in new long[] { 1, 2, 3, 4 }) fake.Telemetry.Enqueue(Telemetry(frame));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(1, 7));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(4, 7));
+        fake.FallbackTelemetry = Telemetry(5);
+        fake.FallbackDiagnostics = DiagnosticsV2(5, 7);
+
+        ScenarioRunResult result = await Run(fake, scenario);
+
+        Assert.Equal(ScenarioRunOutcome.Passed, result.Outcome);
+        Assert.Null(fake.ResetRequest);
+        Assert.Contains("input:batch", fake.Events);
+        Assert.Equal(2, result.InputOperations.Count);
+        Assert.Single(result.InputOperations.Select(value => value.StartsAfterFrame).Distinct());
+        Assert.Equal(7, result.InitialDiagnostics?.Generation);
+        Assert.Equal(7, result.FinalDiagnostics?.Generation);
+    }
+
+    [Fact]
+    public async Task V2MissingMetricFailsClosedAtEnvelope()
+    {
+        ScenarioDefinition scenario = ScenarioParser.Parse("""
+            {"schema":"sotn-scenario/2","id":"v2-bad","version":"1","description":"v2 bad","modId":"coop","timeoutMs":30000,"diagnosticsReset":"none","start":{"timeoutFrames":20,"predicates":[{"type":"metric","schema":"p2d4/2","name":"fatal","operator":"eq","value":false}]},"steps":[{"id":"one","inputs":[{"port":0,"timeline":[{"buttons":[],"frames":1}]}],"checkpoint":{"timeoutFrames":20,"predicates":[{"type":"metric","schema":"p2d4/2","name":"fatal","operator":"eq","value":false}]}}],"artifacts":{"onFailure":[],"onSuccess":[]}}
+            """);
+        var fake = new ScriptedClient();
+        fake.Telemetry.Enqueue(Telemetry(1));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(1, 0, "fatal"));
+
+        ScenarioRunResult result = await Run(fake, scenario);
+
+        Assert.Equal(ScenarioRunOutcome.Failed, result.Outcome);
+        Assert.Equal("start", result.FailedCheckpoint);
+        Assert.Contains(result.UnmetPredicates, value => value.Predicate == "diagnostics.envelope");
+    }
+
+    [Theory]
+    [InlineData("deltaEq", -3, -3)]
+    [InlineData("deltaGte", 4, 3)]
+    [InlineData("deltaLte", -4, -3)]
+    public async Task V2DeltaOperatorsCompareSignedChangeFromResetBaseline(
+        string operation, long change, long expected)
+    {
+        ScenarioDefinition scenario = DeltaScenario(operation, expected, DiagnosticsResetPolicy.Before);
+        var fake = new ScriptedClient();
+        fake.Telemetry.Enqueue(Telemetry(1));
+        fake.Telemetry.Enqueue(Telemetry(2));
+        fake.Telemetry.Enqueue(Telemetry(3));
+        fake.Telemetry.Enqueue(Telemetry(4));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(1, 2, values: new() { ["attackAllocations"] = 99 }));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(1, 3, values: new() { ["attackAllocations"] = 10 }));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(4, 3, values: new() { ["attackAllocations"] = 10 + change }));
+
+        Assert.Equal(ScenarioRunOutcome.Passed, (await Run(fake, scenario)).Outcome);
+    }
+
+    [Fact]
+    public async Task V2ResetNoneUsesAcceptedStartAndKeepsBaselineAcrossSteps()
+    {
+        ScenarioDefinition scenario = DeltaScenario("deltaEq", 5, DiagnosticsResetPolicy.None, twoSteps: true);
+        var fake = new ScriptedClient();
+        foreach (long frame in new long[] { 1, 2, 3, 4, 5, 6, 7 }) fake.Telemetry.Enqueue(Telemetry(frame));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(1, 7, values: new() { ["attackAllocations"] = 20 }));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(4, 7, values: new() { ["attackAllocations"] = 22 }));
+        fake.Diagnostics.Enqueue(DiagnosticsV2(7, 7, values: new() { ["attackAllocations"] = 25 }));
+
+        Assert.Equal(ScenarioRunOutcome.Passed, (await Run(fake, scenario)).Outcome);
+    }
+
+    [Fact]
+    public async Task V2DeltaFailsClosedOnIdentityChangeAndArithmeticOverflow()
+    {
+        foreach ((long start, long current, int finalGeneration) in new[]
+        {
+            (0L, 1L, 8),
+            (long.MinValue, long.MaxValue, 7),
+        })
+        {
+            ScenarioDefinition scenario = DeltaScenario("deltaGte", 0, DiagnosticsResetPolicy.None);
+            var fake = new ScriptedClient();
+            foreach (long frame in new long[] { 1, 2, 3, 4 }) fake.Telemetry.Enqueue(Telemetry(frame));
+            fake.Diagnostics.Enqueue(DiagnosticsV2(1, 7, values: new() { ["attackAllocations"] = start }));
+            fake.Diagnostics.Enqueue(DiagnosticsV2(4, finalGeneration,
+                values: new() { ["attackAllocations"] = current }));
+
+            ScenarioRunResult result = await Run(fake, scenario);
+            Assert.Equal(ScenarioRunOutcome.Failed, result.Outcome);
+            Assert.Contains(finalGeneration == 8 ? "identity" : "terminal", result.PrimaryError!);
+        }
     }
 
     private static Task<ScenarioRunResult> Run(ScriptedClient fake, ScenarioDefinition scenario) =>
@@ -298,8 +394,31 @@ public sealed class ScenarioRunnerTests
     private static ScenarioDefinition Scenario(ScenarioCheckpoint? start = null,
         IReadOnlyList<ScenarioStep>? steps = null) => new(
         ScenarioParser.Schema, "test", "1", "test", "coop", 30000,
+        DiagnosticsResetPolicy.Before,
         start ?? Checkpoint(), steps ?? [Step("step", [Input(0, 1)], Checkpoint())],
         new ScenarioArtifactPolicy([], []), 1);
+
+    private static ScenarioDefinition DeltaScenario(string operation, long expected,
+        DiagnosticsResetPolicy reset, bool twoSteps = false)
+    {
+        MetricOperator op = operation switch
+        {
+            "deltaEq" => MetricOperator.DeltaEq,
+            "deltaGte" => MetricOperator.DeltaGte,
+            "deltaLte" => MetricOperator.DeltaLte,
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+        ScenarioCheckpoint Metric(long value) => new(20,
+            [new MetricScenarioPredicate("p2d4/2", "attackAllocations", op,
+                MetricScalarType.Integer, new ScenarioScalar(null, null, null, value))]);
+        var steps = new List<ScenarioStep> { Step("one", [Input(0, 1)], Metric(twoSteps ? 2 : expected)) };
+        if (twoSteps) steps.Add(Step("two", [Input(0, 1)], Metric(expected)));
+        return new(ScenarioParser.SchemaV2, "delta", "1", "delta test", "coop", 30000, reset,
+            new ScenarioCheckpoint(20, [new MetricScenarioPredicate("p2d4/2", "fatal",
+                MetricOperator.Eq, MetricScalarType.Boolean,
+                new ScenarioScalar(null, null, false, null))]), steps,
+            new ScenarioArtifactPolicy([], []), steps.Count);
+    }
 
     private static ScenarioCheckpoint Checkpoint(DiagnosticResult result = DiagnosticResult.Pass) =>
         new(20, [Diagnostic(result)]);
@@ -344,6 +463,38 @@ public sealed class ScenarioRunnerTests
             fields,
         });
         return new ModDiagnosticsDto("coop", frame, Session, generation, payload);
+    }
+
+    private static ModDiagnosticsDto DiagnosticsV2(long frame, int generation, string? omitMetric = null,
+        Dictionary<string, long>? values = null)
+    {
+        var metrics = ScenarioMetricContract.Types.ToDictionary(pair => pair.Key, pair => pair.Value switch
+        {
+            MetricScalarType.Integer => (object)(values != null && values.TryGetValue(pair.Key, out long value)
+                ? value : pair.Key == "healthHp" ? 100L : 0L),
+            MetricScalarType.Boolean => false,
+            MetricScalarType.String => "0",
+            _ => throw new InvalidOperationException(),
+        }, StringComparer.Ordinal);
+        if (omitMetric is not null) metrics.Remove(omitMetric);
+        JsonElement payload = JsonSerializer.SerializeToElement(new
+        {
+            schema = "p2d4/2", modVersion = "0.4.0", sessionId = Session, generation,
+            modFrame = frame, automationFrame = frame, legacy = "P2D4 test",
+            fields = P2D4Fields(), metrics,
+        });
+        return new ModDiagnosticsDto("coop", frame, Session, generation, payload);
+    }
+
+    private static Dictionary<string, string> P2D4Fields(IReadOnlyDictionary<string, string>? overrides = null)
+    {
+        string[] names = ["VER", "H", "I", "K", "M", "R", "N", "B", "C", "T", "S", "G", "Q", "A", "E",
+            "D", "VIS", "J", "X", "EN", "AW", "HU", "HP"];
+        var result = names.ToDictionary(name => name, name => name == "VER" ? "0.4.0" : "P",
+            StringComparer.Ordinal);
+        if (overrides is not null)
+            foreach ((string key, string value) in overrides) result[key] = value;
+        return result;
     }
 
     private sealed class FakeClock(Action? onDelay = null) : IScenarioClock
@@ -417,6 +568,17 @@ public sealed class ScenarioRunnerTests
             if (ThrowOnInput is not null) return Task.FromException<InputOperationDto>(ThrowOnInput);
             InputRequests.Add(request);
             return Task.FromResult(new InputOperationDto(request.Port, request.Segments.Sum(value => value.Frames), 13));
+        }
+
+        public Task<InputBatchOperationDto> RunInputBatchAsync(InputBatchRequest request, CancellationToken token)
+        {
+            Events.Add("input:batch");
+            InputAttempts++;
+            if (ThrowOnInput is not null) return Task.FromException<InputBatchOperationDto>(ThrowOnInput);
+            foreach (InputTimelineRequest timeline in request.Timelines) InputRequests.Add(timeline);
+            InputOperationDto[] operations = request.Timelines.Select(timeline => new InputOperationDto(
+                timeline.Port, timeline.Segments.Sum(value => value.Frames), 13)).ToArray();
+            return Task.FromResult(new InputBatchOperationDto(13, operations));
         }
 
         public Task<OperationResultDto> ClearInputAsync(CancellationToken token)

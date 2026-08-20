@@ -6,7 +6,7 @@ namespace SymphonyRecomp.Automation.Tests;
 public sealed class AutomationProtocolTests
 {
     [Fact]
-    public void StructuredDiagnosticsBumpProtocolVersion() => Assert.Equal("1.1", AutomationProtocol.Version);
+    public void AtomicInputBatchBumpsProtocolVersion() => Assert.Equal("1.2", AutomationProtocol.Version);
 
     [Fact]
     public async Task FrameRoundTripsAcrossPartialReads()

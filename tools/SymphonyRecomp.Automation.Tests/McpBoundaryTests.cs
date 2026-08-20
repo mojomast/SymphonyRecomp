@@ -86,10 +86,12 @@ public sealed class McpBoundaryTests
     {
         string[] expected =
         [
-            "sotn_capture_screenshot", "sotn_clear_input", "sotn_get_logs", "sotn_get_mod_diagnostics",
-            "sotn_get_state", "sotn_hard_reset", "sotn_launch_game", "sotn_list_entities", "sotn_list_mods",
+            "sotn_cancel_campaign", "sotn_capture_screenshot", "sotn_clear_input", "sotn_get_campaign",
+            "sotn_get_logs", "sotn_get_mod_diagnostics", "sotn_get_state", "sotn_hard_reset",
+            "sotn_launch_game", "sotn_list_entities", "sotn_list_mods",
             "sotn_process_status", "sotn_read_memory", "sotn_reload_mod", "sotn_reset_mod_diagnostics",
-            "sotn_run_input", "sotn_run_scenario", "sotn_set_mod_enabled", "sotn_stop_game", "sotn_wait_for_state",
+            "sotn_run_input", "sotn_run_scenario", "sotn_set_mod_enabled", "sotn_start_campaign",
+            "sotn_stop_game", "sotn_wait_for_state",
         ];
         McpServerToolAttribute[] tools = typeof(SotnTools)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
@@ -107,6 +109,12 @@ public sealed class McpBoundaryTests
         Assert.False(scenario.ReadOnly);
         Assert.True(scenario.Destructive);
         Assert.False(scenario.Idempotent);
+        McpServerToolAttribute campaign = Assert.Single(tools,
+            tool => tool.Name == "sotn_start_campaign");
+        Assert.False(campaign.ReadOnly);
+        Assert.True(campaign.Destructive);
+        Assert.False(campaign.Idempotent);
+        Assert.True(Assert.Single(tools, tool => tool.Name == "sotn_get_campaign").ReadOnly);
     }
 
     [Fact]

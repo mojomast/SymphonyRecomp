@@ -26,5 +26,6 @@
   <ItemGroup>
     <Compile Include="..\..\automation\AutomationBridge.cs" Link="GameBridge\AutomationBridge.cs" />
     <Compile Include="..\..\automation\AutomationGameThread.cs" Link="GameBridge\AutomationGameThread.cs" />
+    <Compile Include="..\..\automation\PlayerTelemetryPolicy.cs" Link="GameBridge\PlayerTelemetryPolicy.cs" />
   </ItemGroup>
 </Project>

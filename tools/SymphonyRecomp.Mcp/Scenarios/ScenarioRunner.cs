@@ -12,6 +12,7 @@ public interface IScenarioAutomationClient
     Task<ModDiagnosticsResetDto> ResetModDiagnosticsAsync(ModDiagnosticsResetRequest request,
         CancellationToken token);
     Task<InputOperationDto> RunInputAsync(InputTimelineRequest request, CancellationToken token);
+    Task<InputBatchOperationDto> RunInputBatchAsync(InputBatchRequest request, CancellationToken token);
     Task<OperationResultDto> ClearInputAsync(CancellationToken token);
     Task<ModTelemetryDto[]> ListModsAsync(CancellationToken token);
     Task<EntityListDto> ListEntitiesAsync(int maximum, CancellationToken token);
@@ -75,6 +76,7 @@ public sealed class ScenarioRunner
         ScenarioDiagnosticIdentity? initialDiagnostics = null;
         ScenarioDiagnosticIdentity? postResetDiagnostics = null;
         ScenarioDiagnosticIdentity? finalDiagnostics = null;
+        Envelope? metricBaseline = null;
         var operations = new List<ScenarioInputOperation>(scenario.Steps.Count * 2);
         IReadOnlyList<ScenarioUnmetPredicate> unmet = [];
         string? failedCheckpoint = null;
@@ -92,7 +94,7 @@ public sealed class ScenarioRunner
             initialFrame = finalFrame = bridge.Frame;
             if (!bridge.Ready || bridge.ProtocolVersion != AutomationProtocol.Version)
             {
-                primaryError = "The automation bridge is not ready with protocol 1.1.";
+                primaryError = $"The automation bridge is not ready with protocol {AutomationProtocol.Version}.";
                 outcome = ScenarioRunOutcome.Failed;
                 goto Complete;
             }
@@ -112,27 +114,36 @@ public sealed class ScenarioRunner
             }
 
             ScenarioDiagnosticIdentity identity = start.Diagnostics!;
-            ModDiagnosticsResetDto reset = await _client.ResetModDiagnosticsAsync(
-                new ModDiagnosticsResetRequest(scenario.ModId, identity.SessionId, identity.Generation, true),
-                watchdog.Token).ConfigureAwait(false);
-            if (!reset.Applied || reset.Id != scenario.ModId)
+            if (scenario.DiagnosticsReset == DiagnosticsResetPolicy.Before)
             {
-                primaryError = "The diagnostic reset was not applied.";
-                outcome = ScenarioRunOutcome.Failed;
-                goto Complete;
-            }
+                ModDiagnosticsResetDto reset = await _client.ResetModDiagnosticsAsync(
+                    new ModDiagnosticsResetRequest(scenario.ModId, identity.SessionId, identity.Generation, true),
+                    watchdog.Token).ConfigureAwait(false);
+                if (!reset.Applied || reset.Id != scenario.ModId)
+                {
+                    primaryError = "The diagnostic reset was not applied.";
+                    outcome = ScenarioRunOutcome.Failed;
+                    goto Complete;
+                }
 
-            ModDiagnosticsDto resetCapture = await _client.CaptureModDiagnosticsAsync(
-                new ModDiagnosticsCaptureRequest(scenario.ModId), watchdog.Token).ConfigureAwait(false);
-            Envelope resetEnvelope = ValidateEnvelope(resetCapture, scenario.ModId);
-            postResetDiagnostics = finalDiagnostics = resetEnvelope.Identity;
-            finalFrame = Math.Max(finalFrame.Value, resetCapture.Frame);
-            if (resetEnvelope.Identity.SessionId != identity.SessionId ||
-                resetEnvelope.Identity.Generation != identity.Generation + 1)
+                ModDiagnosticsDto resetCapture = await _client.CaptureModDiagnosticsAsync(
+                    new ModDiagnosticsCaptureRequest(scenario.ModId), watchdog.Token).ConfigureAwait(false);
+                Envelope resetEnvelope = ValidateEnvelope(resetCapture, scenario.ModId);
+                postResetDiagnostics = finalDiagnostics = resetEnvelope.Identity;
+                metricBaseline = resetEnvelope;
+                finalFrame = Math.Max(finalFrame.Value, resetCapture.Frame);
+                if (resetEnvelope.Identity.SessionId != identity.SessionId ||
+                    resetEnvelope.Identity.Generation != identity.Generation + 1)
+                {
+                    primaryError = "The post-reset diagnostic identity was not the exact next generation.";
+                    outcome = ScenarioRunOutcome.Failed;
+                    goto Complete;
+                }
+            }
+            else
             {
-                primaryError = "The post-reset diagnostic identity was not the exact next generation.";
-                outcome = ScenarioRunOutcome.Failed;
-                goto Complete;
+                postResetDiagnostics = finalDiagnostics = identity;
+                metricBaseline = start.Envelope;
             }
 
             foreach (ScenarioStep step in scenario.Steps)
@@ -141,16 +152,39 @@ public sealed class ScenarioRunner
                     .ConfigureAwait(false);
                 finalFrame = beforeInput.Runtime.Frame;
                 long deadlineStart = beforeInput.Runtime.Frame;
-                foreach (ScenarioInput input in step.Inputs.OrderBy(value => value.Port))
+                if (scenario.Schema == ScenarioParser.SchemaV2 && step.Inputs.Count > 1)
                 {
                     inputSubmitted = true;
-                    InputOperationDto operation = await _client.RunInputAsync(
-                        new InputTimelineRequest(input.Port, input.Timeline.ToArray()), watchdog.Token)
+                    InputBatchRequest request = new(step.Inputs.OrderBy(value => value.Port)
+                        .Select(input => new InputTimelineRequest(input.Port, input.Timeline.ToArray())).ToArray());
+                    InputBatchOperationDto batch = await _client.RunInputBatchAsync(request, watchdog.Token)
                         .ConfigureAwait(false);
-                    if (operation.Port != input.Port || operation.TotalFrames != input.TotalFrames ||
-                        operation.StartsAfterFrame < 0)
-                        throw new InvalidDataException("The input operation response did not match its request.");
-                    operations.Add(new ScenarioInputOperation(step.Id, operation.Port, operation.StartsAfterFrame));
+                    if (batch.StartsAfterFrame < 0 || batch.Operations.Length != request.Timelines.Length ||
+                        batch.Operations.Any(operation => operation.StartsAfterFrame != batch.StartsAfterFrame))
+                        throw new InvalidDataException("The atomic input batch response was inconsistent.");
+                    foreach (ScenarioInput input in step.Inputs.OrderBy(value => value.Port))
+                    {
+                        InputOperationDto? operation = batch.Operations.SingleOrDefault(value => value.Port == input.Port);
+                        if (operation is null)
+                            throw new InvalidDataException("The atomic input batch omitted a requested port.");
+                        if (operation.TotalFrames != input.TotalFrames)
+                            throw new InvalidDataException("The atomic input batch duration was inconsistent.");
+                        operations.Add(new ScenarioInputOperation(step.Id, operation.Port, operation.StartsAfterFrame));
+                    }
+                }
+                else
+                {
+                    foreach (ScenarioInput input in step.Inputs.OrderBy(value => value.Port))
+                    {
+                        inputSubmitted = true;
+                        InputOperationDto operation = await _client.RunInputAsync(
+                            new InputTimelineRequest(input.Port, input.Timeline.ToArray()), watchdog.Token)
+                            .ConfigureAwait(false);
+                        if (operation.Port != input.Port || operation.TotalFrames != input.TotalFrames ||
+                            operation.StartsAfterFrame < 0)
+                            throw new InvalidDataException("The input operation response did not match its request.");
+                        operations.Add(new ScenarioInputOperation(step.Id, operation.Port, operation.StartsAfterFrame));
+                    }
                 }
 
                 NeutralResult neutral = await WaitForNeutralAsync(deadlineStart, step.Checkpoint.TimeoutFrames,
@@ -166,7 +200,8 @@ public sealed class ScenarioRunner
                 }
 
                 CheckpointResult checkpoint = await WaitForCheckpointAsync(scenario, step.Id,
-                    step.Checkpoint, watchdog.Token, deadlineStart, postResetDiagnostics).ConfigureAwait(false);
+                    step.Checkpoint, watchdog.Token, deadlineStart, postResetDiagnostics, metricBaseline)
+                    .ConfigureAwait(false);
                 finalFrame = checkpoint.Frame;
                 finalDiagnostics = checkpoint.Diagnostics;
                 if (!checkpoint.Passed)
@@ -246,7 +281,7 @@ public sealed class ScenarioRunner
 
     private async Task<CheckpointResult> WaitForCheckpointAsync(ScenarioDefinition scenario, string name,
         ScenarioCheckpoint checkpoint, CancellationToken token, long? startFrame = null,
-        ScenarioDiagnosticIdentity? expectedIdentity = null)
+        ScenarioDiagnosticIdentity? expectedIdentity = null, Envelope? metricBaseline = null)
     {
         long baseline = startFrame ?? -1;
         long lastFrame = -1;
@@ -268,13 +303,13 @@ public sealed class ScenarioRunner
             }
             catch (InvalidDataException exception)
             {
-                return new CheckpointResult(false, frame, null,
+                return new CheckpointResult(false, frame, null, null,
                     [new ScenarioUnmetPredicate(-1, "diagnostics.envelope", exception.Message)],
                     "The diagnostic envelope was malformed.");
             }
             long observationFrame = Math.Max(frame, diagnostics.Frame);
             if (diagnostics.Frame < frame || (lastFrame >= 0 && observationFrame < lastFrame))
-                return new CheckpointResult(false, observationFrame, envelope.Identity,
+                return new CheckpointResult(false, observationFrame, envelope.Identity, envelope,
                     [new ScenarioUnmetPredicate(-1, "diagnostics.frame", "diagnostic frame regressed")],
                     $"Checkpoint '{name}' observed a non-monotonic diagnostic frame.");
             if (baseline < 0) baseline = observationFrame;
@@ -284,28 +319,28 @@ public sealed class ScenarioRunner
                 (envelope.Identity.SessionId != observedIdentity.SessionId ||
                  envelope.Identity.Generation != observedIdentity.Generation))
             {
-                return new CheckpointResult(false, observationFrame, envelope.Identity,
+                return new CheckpointResult(false, observationFrame, envelope.Identity, envelope,
                     [new ScenarioUnmetPredicate(-1, "diagnostics.identity", "diagnostic identity changed")],
                     "The diagnostic identity changed during scenario execution.");
             }
             observedIdentity ??= envelope.Identity;
 
-            Evaluation evaluation = Evaluate(checkpoint.Predicates, telemetry.Game, envelope);
+            Evaluation evaluation = Evaluate(checkpoint.Predicates, telemetry.Game, envelope, metricBaseline);
             if (evaluation.TerminalFailure)
-                return new CheckpointResult(false, observationFrame, envelope.Identity, evaluation.Unmet,
+                return new CheckpointResult(false, observationFrame, envelope.Identity, envelope, evaluation.Unmet,
                     $"Checkpoint '{name}' reported a terminal diagnostic failure.");
             if (evaluation.Unmet.Count == 0 && observationFrame - baseline <= checkpoint.TimeoutFrames)
-                return new CheckpointResult(true, observationFrame, envelope.Identity, [], null);
+                return new CheckpointResult(true, observationFrame, envelope.Identity, envelope, [], null);
             unmet = evaluation.Unmet;
             if (observationFrame - baseline >= checkpoint.TimeoutFrames)
             {
                 if (unmet.Count == 0)
                     unmet = [new ScenarioUnmetPredicate(-1, "checkpoint.deadline", "predicate matched too late")];
-                return new CheckpointResult(false, observationFrame, envelope.Identity, unmet,
+                return new CheckpointResult(false, observationFrame, envelope.Identity, envelope, unmet,
                     $"Checkpoint '{name}' exceeded its frame deadline.");
             }
             if (stagnantPolls >= MaximumStagnantPolls)
-                return new CheckpointResult(false, observationFrame, envelope.Identity, unmet,
+                return new CheckpointResult(false, observationFrame, envelope.Identity, envelope, unmet,
                     $"Checkpoint '{name}' observed no automation frame progress.");
             await _clock.DelayAsync(PollDelay, token).ConfigureAwait(false);
         }
@@ -339,7 +374,7 @@ public sealed class ScenarioRunner
         input.AutomationFrames1 == 0 && input.AutomationFrames2 == 0;
 
     private static Evaluation Evaluate(IReadOnlyList<ScenarioPredicate> predicates, GameTelemetryDto game,
-        Envelope diagnostics)
+        Envelope diagnostics, Envelope? metricBaseline)
     {
         var unmet = new List<ScenarioUnmetPredicate>();
         bool terminal = false;
@@ -350,6 +385,12 @@ public sealed class ScenarioRunner
             {
                 (bool matches, string observed) = EvaluateGame(gamePredicate, game);
                 if (!matches) unmet.Add(new ScenarioUnmetPredicate(index, Describe(gamePredicate), observed));
+                continue;
+            }
+
+            if (predicate is MetricScenarioPredicate metric)
+            {
+                EvaluateMetric(index, metric, diagnostics, metricBaseline, unmet, ref terminal);
                 continue;
             }
 
@@ -414,12 +455,111 @@ public sealed class ScenarioRunner
             GamePredicateField.PlayerHasControl => (predicate.Expected.Boolean is bool control &&
                 game.Player?.HasControl == control,
                 game.Player?.HasControl.ToString() ?? "unavailable"),
+            GamePredicateField.Area => CompareGameInteger(predicate, game.Area),
+            GamePredicateField.Room => CompareGameInteger(predicate, game.Room),
+            GamePredicateField.RoomX => CompareGameInteger(predicate, game.RoomX),
+            GamePredicateField.RoomY => CompareGameInteger(predicate, game.RoomY),
             _ => (false, "unsupported game field"),
         };
     }
 
+    private static (bool Matches, string Observed) CompareGameInteger(GameScenarioPredicate predicate, int value) =>
+        (predicate.Expected.SignedInteger == value, value.ToString());
+
+    private static void EvaluateMetric(int index, MetricScenarioPredicate predicate, Envelope diagnostics,
+        Envelope? baseline, List<ScenarioUnmetPredicate> unmet, ref bool terminal)
+    {
+        if (diagnostics.Schema != predicate.Schema)
+        {
+            unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), "diagnostic schema mismatch"));
+            terminal = true;
+            return;
+        }
+        if (!diagnostics.Metrics.TryGetValue(predicate.Name, out MetricValue? observed) || observed is null)
+        {
+            unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), "metric missing"));
+            terminal = true;
+            return;
+        }
+        if (observed.Type != predicate.ScalarType)
+        {
+            unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), "metric scalar type mismatch"));
+            terminal = true;
+            return;
+        }
+        bool delta = predicate.Operator is MetricOperator.DeltaEq or MetricOperator.DeltaGte or
+            MetricOperator.DeltaLte;
+        long? integer = observed.Integer;
+        if (delta)
+        {
+            if (baseline is null || baseline.Identity.SessionId != diagnostics.Identity.SessionId ||
+                baseline.Identity.Generation != diagnostics.Identity.Generation ||
+                !baseline.Metrics.TryGetValue(predicate.Name, out MetricValue? initial) ||
+                initial.Type != MetricScalarType.Integer || initial.Integer is not long start ||
+                observed.Integer is not long current)
+            {
+                unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), "metric delta baseline unavailable or mismatched"));
+                terminal = true;
+                return;
+            }
+            try { integer = checked(current - start); }
+            catch (OverflowException)
+            {
+                unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), "metric delta overflow"));
+                terminal = true;
+                return;
+            }
+        }
+        bool matches = predicate.ScalarType switch
+        {
+            MetricScalarType.Integer => Compare(predicate.Operator, integer, predicate.Expected.SignedInteger),
+            MetricScalarType.Boolean => CompareBoolean(predicate.Operator, observed.Boolean, predicate.Expected.Boolean),
+            MetricScalarType.String => CompareString(predicate.Operator, observed.String, predicate.Expected.String),
+            _ => false,
+        };
+        if (!matches) unmet.Add(new ScenarioUnmetPredicate(index, Describe(predicate), Bound(observed.Display)));
+    }
+
+    private static bool Compare(MetricOperator operation, long? actual, long? expected) =>
+        actual is long a && expected is long e && operation switch
+        {
+            MetricOperator.Eq => a == e,
+            MetricOperator.Ne => a != e,
+            MetricOperator.Gte => a >= e,
+            MetricOperator.Lte => a <= e,
+            MetricOperator.DeltaEq => a == e,
+            MetricOperator.DeltaGte => a >= e,
+            MetricOperator.DeltaLte => a <= e,
+            _ => false,
+        };
+
+    private static bool CompareBoolean(MetricOperator operation, bool? actual, bool? expected) =>
+        actual is bool a && expected is bool e && operation switch
+        {
+            MetricOperator.Eq => a == e,
+            MetricOperator.Ne => a != e,
+            _ => false,
+        };
+
+    private static bool CompareString(MetricOperator operation, string? actual, string? expected) =>
+        actual is not null && expected is not null && operation switch
+        {
+            MetricOperator.Eq => actual == expected,
+            MetricOperator.Ne => actual != expected,
+            _ => false,
+        };
+
     private static Envelope ValidateEnvelope(ModDiagnosticsDto diagnostics, string modId)
     {
+        if (diagnostics.Payload.ValueKind == JsonValueKind.Object &&
+            diagnostics.Payload.TryGetProperty("schema", out JsonElement strictSchema) &&
+            strictSchema.ValueKind == JsonValueKind.String && strictSchema.GetString() == "p2d4/2")
+        {
+            P2D4Envelope parsed = P2D4EnvelopeParser.Parse(diagnostics, modId);
+            return new(parsed.Schema, parsed.Fields, parsed.Metrics.ToDictionary(pair => pair.Key,
+                pair => new MetricValue(pair.Value.Type, pair.Value.Integer, pair.Value.Boolean,
+                    pair.Value.String, pair.Value.Display), StringComparer.Ordinal), parsed.Identity);
+        }
         if (diagnostics.Id != modId || diagnostics.Frame < 0 || diagnostics.Generation < 0 ||
             diagnostics.SessionId.Length != 32 || diagnostics.SessionId.Any(value => !Uri.IsHexDigit(value)) ||
             diagnostics.Payload.ValueKind != JsonValueKind.Object)
@@ -443,19 +583,38 @@ public sealed class ScenarioRunner
             if (field.Value.ValueKind != JsonValueKind.String || !fields.TryAdd(field.Name, field.Value.GetString()!))
                 throw new InvalidDataException("Diagnostic fields must be unique strings.");
         }
-        return new Envelope(schemaElement.GetString()!, fields,
+        string schema = schemaElement.GetString()!;
+        var metrics = new Dictionary<string, MetricValue>(StringComparer.Ordinal);
+        return new Envelope(schema, fields, metrics,
             new ScenarioDiagnosticIdentity(diagnostics.SessionId, diagnostics.Generation, diagnostics.Frame,
-                schemaElement.GetString()));
+                schema));
     }
+
+    private static MetricValue ParseMetric(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Number when value.TryGetInt64(out long integer) =>
+            new MetricValue(MetricScalarType.Integer, integer, null, null, integer.ToString()),
+        JsonValueKind.True => new MetricValue(MetricScalarType.Boolean, null, true, null, "true"),
+        JsonValueKind.False => new MetricValue(MetricScalarType.Boolean, null, false, null, "false"),
+        JsonValueKind.String when value.GetString() is { } text && text.Length <= 256 &&
+            text.All(character => character is >= ' ' and <= '~') =>
+            new MetricValue(MetricScalarType.String, null, null, text, text),
+        _ => throw new InvalidDataException("Diagnostic metric must be a bounded integer, boolean, or printable ASCII string."),
+    };
 
     private static string Describe(GameScenarioPredicate predicate) => $"game.{predicate.Field}";
     private static string Describe(DiagnosticScenarioPredicate predicate) => $"diagnostic.{predicate.Field}";
+    private static string Describe(MetricScenarioPredicate predicate) => $"metric.{predicate.Name}.{predicate.Operator}";
     private static string Bound(string? value) => value is null ? "null" : value[..Math.Min(value.Length, 256)];
 
     private sealed record Envelope(string Schema, IReadOnlyDictionary<string, string> Fields,
+        IReadOnlyDictionary<string, MetricValue> Metrics,
         ScenarioDiagnosticIdentity Identity);
+    private sealed record MetricValue(MetricScalarType Type, long? Integer, bool? Boolean, string? String,
+        string Display);
     private sealed record Evaluation(IReadOnlyList<ScenarioUnmetPredicate> Unmet, bool TerminalFailure);
     private sealed record CheckpointResult(bool Passed, long Frame, ScenarioDiagnosticIdentity? Diagnostics,
+        Envelope? Envelope,
         IReadOnlyList<ScenarioUnmetPredicate> Unmet, string? Error);
     private sealed record NeutralResult(bool Passed, long Frame, string? Error);
 }

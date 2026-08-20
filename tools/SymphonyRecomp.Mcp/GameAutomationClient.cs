@@ -106,6 +106,8 @@ public sealed class GameAutomationClient : IAsyncDisposable
         CallReadyAsync<MemoryReadDto>("memory.read", request, 5000, token);
     public Task<InputOperationDto> RunInputAsync(InputTimelineRequest request, CancellationToken token) =>
         CallReadyAsync<InputOperationDto>("input.timeline", request, 5000, token);
+    public Task<InputBatchOperationDto> RunInputBatchAsync(InputBatchRequest request, CancellationToken token) =>
+        CallReadyAsync<InputBatchOperationDto>("input.batch", request, 5000, token);
     public Task<OperationResultDto> ClearInputAsync(CancellationToken token) =>
         CallReadyAsync<OperationResultDto>("input.clear", null, 5000, token);
     public Task<ScreenshotDto> CaptureScreenshotAsync(CancellationToken token) =>

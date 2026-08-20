@@ -1,56 +1,40 @@
 {
-  "schema": "sotn-scenario/1",
+  "schema": "sotn-scenario/2",
   "id": "coop-locomotion-jump",
-  "version": "1",
-  "description": "Exercise bounded Player 2 right, left, and normal jump locomotion.",
+  "version": "2",
+  "description": "Exercise bounded Player 2 right, left, and normal jump locomotion with atomic neutral Port 1 input.",
   "modId": "coop-feasibility",
   "timeoutMs": 30000,
-  "start": {
-    "timeoutFrames": 300,
-    "predicates": [
-      { "type": "game", "field": "state", "equals": "Play" },
-      { "type": "game", "field": "character", "equals": "Alucard" },
-      { "type": "game", "field": "loading", "equals": false },
-      { "type": "game", "field": "menuOpen", "equals": false },
-      { "type": "game", "field": "mapOpen", "equals": false },
-      { "type": "diagnostic", "schema": "p2d4/1", "field": "H", "result": "P" },
-      { "type": "diagnostic", "schema": "p2d4/1", "field": "K", "equals": "-" },
-      { "type": "diagnostic", "schema": "p2d4/1", "field": "E", "equals": "0" }
-    ]
-  },
-  "steps": [
-    {
-      "id": "locomotion-jump",
-      "inputs": [
-        {
-          "port": 0,
-          "timeline": [
-            { "buttons": [], "frames": 64 }
-          ]
-        },
-        {
-          "port": 1,
-          "timeline": [
-            { "buttons": ["Right"], "frames": 12 },
-            { "buttons": [], "frames": 4 },
-            { "buttons": ["Left"], "frames": 12 },
-            { "buttons": [], "frames": 4 },
-            { "buttons": ["Cross"], "frames": 1 },
-            { "buttons": [], "frames": 31 }
-          ]
-        }
-      ],
-      "checkpoint": {
-        "timeoutFrames": 300,
-        "predicates": [
-          { "type": "diagnostic", "schema": "p2d4/1", "field": "M", "result": "P" },
-          { "type": "diagnostic", "schema": "p2d4/1", "field": "E", "equals": "0" }
-        ]
-      }
-    }
-  ],
-  "artifacts": {
-    "onFailure": ["state", "diagnostics", "entities", "logs", "screenshot"],
-    "onSuccess": ["state", "diagnostics"]
-  }
+  "diagnosticsReset": "before",
+  "start": { "timeoutFrames": 300, "predicates": [
+    { "type": "game", "field": "state", "equals": "Play" },
+    { "type": "game", "field": "character", "equals": "Alucard" },
+    { "type": "game", "field": "loading", "equals": false },
+    { "type": "game", "field": "menuOpen", "equals": false },
+    { "type": "game", "field": "mapOpen", "equals": false },
+    { "type": "diagnostic", "schema": "p2d4/2", "field": "H", "result": "P" },
+    { "type": "diagnostic", "schema": "p2d4/2", "field": "K", "equals": "-" },
+    { "type": "metric", "schema": "p2d4/2", "name": "fatal", "operator": "eq", "value": false },
+    { "type": "metric", "schema": "p2d4/2", "name": "errorCode", "operator": "eq", "value": "0" }
+  ]},
+  "steps": [{
+    "id": "locomotion-jump",
+    "inputs": [
+      { "port": 0, "timeline": [{ "buttons": [], "frames": 72 }] },
+      { "port": 1, "timeline": [
+        { "buttons": [], "frames": 8 },
+        { "buttons": ["Right"], "frames": 12 }, { "buttons": [], "frames": 4 },
+        { "buttons": ["Left"], "frames": 12 }, { "buttons": [], "frames": 4 },
+        { "buttons": ["Cross"], "frames": 2 }, { "buttons": [], "frames": 30 }
+      ] }
+    ],
+    "checkpoint": { "timeoutFrames": 300, "predicates": [
+      { "type": "diagnostic", "schema": "p2d4/2", "field": "M", "result": "P" },
+      { "type": "metric", "schema": "p2d4/2", "name": "configuredProcessedPad2Available", "operator": "eq", "value": true },
+      { "type": "metric", "schema": "p2d4/2", "name": "fatal", "operator": "eq", "value": false },
+      { "type": "metric", "schema": "p2d4/2", "name": "errorCode", "operator": "eq", "value": "0" },
+      { "type": "metric", "schema": "p2d4/2", "name": "attackOrphanMarkerCount", "operator": "eq", "value": 0 }
+    ] }
+  }],
+  "artifacts": { "onFailure": ["state", "diagnostics", "entities", "logs", "screenshot"], "onSuccess": ["state", "diagnostics"] }
 }

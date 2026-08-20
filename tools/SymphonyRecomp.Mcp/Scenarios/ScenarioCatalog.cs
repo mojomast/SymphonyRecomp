@@ -4,51 +4,74 @@ using ModelContextProtocol;
 
 namespace SymphonyRecomp.Mcp.Scenarios;
 
+public sealed record ScenarioCatalogEntry(string Id, string Version, string ResourceName);
+
 public sealed class ScenarioCatalog
 {
     public const string CoopLocomotionJumpId = "coop-locomotion-jump";
-    public const string CoopLocomotionJumpVersion = "1";
-    private const string ResourceName =
-        "SymphonyRecomp.Mcp.Scenarios.Catalog.coop-locomotion-jump.json";
+    public const string CoopLocomotionJumpVersion = "2";
+    public const int MaximumEntries = 32;
+
+    private static readonly ScenarioCatalogEntry[] StableDescriptors =
+    [
+        Entry(CoopLocomotionJumpId, CoopLocomotionJumpVersion),
+        Entry("coop-transition-west", "3"),
+        Entry("coop-contact-hit", "2"),
+        Entry("coop-projectile-hit", "2"),
+        Entry("coop-damage-revive", "2"),
+        Entry("coop-drop-observe", "1"),
+    ];
 
     private readonly IReadOnlyDictionary<string, string> _sources;
+    public IReadOnlyList<ScenarioCatalogEntry> Inventory { get; }
 
-    public ScenarioCatalog() : this(typeof(ScenarioCatalog).Assembly) { }
+    public ScenarioCatalog() : this(typeof(ScenarioCatalog).Assembly, StableDescriptors) { }
 
-    internal ScenarioCatalog(Assembly assembly)
+    internal ScenarioCatalog(Assembly assembly, IEnumerable<ScenarioCatalogEntry>? descriptors = null)
     {
         ArgumentNullException.ThrowIfNull(assembly);
-        using Stream stream = assembly.GetManifestResourceStream(ResourceName)
-            ?? throw new InvalidOperationException("The embedded scenario catalog is incomplete.");
-        if (stream.Length > ScenarioParser.MaximumSourceBytes)
-            throw new InvalidOperationException("An embedded scenario exceeds its size bound.");
-        using var reader = new StreamReader(stream, new UTF8Encoding(false, true),
-            detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: false);
-        string source;
-        try { source = reader.ReadToEnd(); }
-        catch (DecoderFallbackException exception)
-        {
-            throw new InvalidOperationException("An embedded scenario is not valid UTF-8.", exception);
-        }
+        ScenarioCatalogEntry[] entries = (descriptors ?? StableDescriptors).ToArray();
+        if (entries.Length is < 1 or > MaximumEntries)
+            throw new InvalidOperationException("The embedded scenario descriptor table is outside its bound.");
+        if (entries.Select(value => value.Id).Distinct(StringComparer.Ordinal).Count() != entries.Length ||
+            entries.Select(value => value.ResourceName).Distinct(StringComparer.Ordinal).Count() != entries.Length)
+            throw new InvalidOperationException("The embedded scenario descriptor table contains duplicates.");
 
-        ScenarioDefinition scenario;
-        try { scenario = ScenarioParser.Parse(source); }
-        catch (FormatException exception)
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (ScenarioCatalogEntry entry in entries)
         {
-            throw new InvalidOperationException("An embedded scenario is invalid.", exception);
+            using Stream stream = assembly.GetManifestResourceStream(entry.ResourceName)
+                ?? throw new InvalidOperationException("The embedded scenario catalog is incomplete.");
+            if (stream.Length > ScenarioParser.MaximumSourceBytes)
+                throw new InvalidOperationException("An embedded scenario exceeds its size bound.");
+            using var reader = new StreamReader(stream, new UTF8Encoding(false, true),
+                detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: false);
+            string source;
+            try { source = reader.ReadToEnd(); }
+            catch (DecoderFallbackException exception)
+            {
+                throw new InvalidOperationException("An embedded scenario is not valid UTF-8.", exception);
+            }
+            ScenarioDefinition scenario;
+            try { scenario = ScenarioParser.Parse(source); }
+            catch (FormatException exception)
+            {
+                throw new InvalidOperationException("An embedded scenario is invalid.", exception);
+            }
+            if (scenario.Id != entry.Id || scenario.Version != entry.Version)
+                throw new InvalidOperationException("An embedded scenario identity is invalid.");
+            sources.Add(scenario.Id, source);
         }
-        if (scenario.Id != CoopLocomotionJumpId || scenario.Version != CoopLocomotionJumpVersion)
-            throw new InvalidOperationException("An embedded scenario identity is invalid.");
-        _sources = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [scenario.Id] = source,
-        };
+        Inventory = Array.AsReadOnly(entries);
+        _sources = sources;
     }
+
+    private static ScenarioCatalogEntry Entry(string id, string version) => new(id, version,
+        $"SymphonyRecomp.Mcp.Scenarios.Catalog.{id}.json");
 
     public string GetSource(string id)
     {
-        if (string.IsNullOrEmpty(id) || id.Length > 64 ||
-            !IsAlphaNumeric(id[0]) ||
+        if (string.IsNullOrEmpty(id) || id.Length > 64 || !IsAlphaNumeric(id[0]) ||
             id.Any(character => !IsAlphaNumeric(character) && character is not ('.' or '_' or '-')))
             throw new McpException("id is not a valid scenario catalog identifier.");
         if (!_sources.TryGetValue(id, out string? source))

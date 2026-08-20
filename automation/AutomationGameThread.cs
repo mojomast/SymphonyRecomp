@@ -116,6 +116,7 @@ internal sealed class AutomationGameThread : IDisposable
                 "logs.read" => Logs((int)pending.Command.Argument!),
                 "memory.read" => ReadMemory((MemoryReadRequest)pending.Command.Argument!),
                 "input.timeline" => SetTimeline((InputTimelineRequest)pending.Command.Argument!),
+                "input.batch" => SetInputBatch((InputBatchRequest)pending.Command.Argument!),
                 "input.clear" => ClearInputResult(),
                 "screenshot.capture" => CaptureScreenshot(),
                 "runtime.hard_reset" => HardReset(),
@@ -211,17 +212,7 @@ internal sealed class AutomationGameThread : IDisposable
         if (!Sotn.Game.InGame)
             return EmptyGame(true, state.ToString(), Sotn.Game.EngineStep.ToString(), gameStepRaw, engineStepRaw);
 
-        PlayerTelemetryDto? player = null;
-        if (Sotn.Entities.Player.IsAlive)
-        {
-            player = new PlayerTelemetryDto(
-                Sotn.Player.PosX, Sotn.Player.PosY, Sotn.Player.ScreenX, Sotn.Player.ScreenY,
-                Sotn.Player.VelocityX, Sotn.Player.VelocityY, Sotn.Player.FacingLeft,
-                Sotn.Player.Step.ToString(), (uint)Sotn.Player.Status, Sotn.Player.HasControl,
-                Sotn.Player.IsInvincible, Sotn.Player.Hp, Sotn.Player.HpMax, Sotn.Player.Mp,
-                Sotn.Player.MpMax, Sotn.Player.Hearts, Sotn.Player.HeartsMax, Sotn.Player.Level,
-                Sotn.Player.Exp, Sotn.Player.Gold, Sotn.Player.KillCount);
-        }
+        PlayerTelemetryDto? player = TryCapturePlayerTelemetry(gameStepRaw, engineStepRaw);
 
         return new GameTelemetryDto(
             true, state.ToString(), Sotn.Game.EngineStep.ToString(), gameStepRaw, engineStepRaw,
@@ -234,6 +225,40 @@ internal sealed class AutomationGameThread : IDisposable
                 _input[0].Mask, _input[1].Mask, _input[0].RemainingFrames, _input[1].RemainingFrames),
             SafeGameString(() => Sotn.Game.SeedName), SafeGameString(() => Sotn.Game.PresetName));
     }
+
+    static PlayerTelemetryDto? TryCapturePlayerTelemetry(uint gameStepRaw, uint engineStepRaw)
+    {
+        try
+        {
+            var safety = new PlayerTelemetrySafety(
+                Sotn.Game.Available,
+                Sotn.Game.State == Sotn.GameState.Play,
+                Sotn.Game.Character == Sotn.PlayableCharacter.Alucard,
+                Sotn.Game.IsLoading,
+                Sotn.Game.MenuOpen,
+                Sotn.Game.MapOpen,
+                gameStepRaw == (uint)Sotn.PlayStep.Default,
+                engineStepRaw == 1,
+                RuntimeApi.Mem!.ReadU32(0x8003C704) == 0,
+                !IsSpecialTransition(RuntimeApi.Mem.ReadU32(0x80097C98)),
+                Sotn.Player.HasControl,
+                Sotn.Player.Hp,
+                (uint)Sotn.Player.Status,
+                (ushort)Sotn.Player.Step);
+            return PlayerTelemetryPolicy.Capture(safety, static () =>
+                new PlayerTelemetryDto(
+                Sotn.Player.PosX, Sotn.Player.PosY, Sotn.Player.ScreenX, Sotn.Player.ScreenY,
+                Sotn.Player.VelocityX, Sotn.Player.VelocityY, Sotn.Player.FacingLeft,
+                Sotn.Player.Step.ToString(), (uint)Sotn.Player.Status, Sotn.Player.HasControl,
+                Sotn.Player.IsInvincible, Sotn.Player.Hp, Sotn.Player.HpMax, Sotn.Player.Mp,
+                Sotn.Player.MpMax, Sotn.Player.Hearts, Sotn.Player.HeartsMax, Sotn.Player.Level,
+                Sotn.Player.Exp, Sotn.Player.Gold, Sotn.Player.KillCount));
+        }
+        catch { return null; }
+    }
+
+    static bool IsSpecialTransition(uint value) =>
+        value is >= 2 and <= 6 || (value & 0x88000000) != 0;
 
     static GameTelemetryDto EmptyGame(bool available, string state, string engineStep = "unavailable",
         uint gameStepRaw = 0, uint engineStepRaw = 0) =>
@@ -394,6 +419,23 @@ internal sealed class AutomationGameThread : IDisposable
         return new InputOperationDto(request.Port, total, _frame);
     }
 
+    InputBatchOperationDto SetInputBatch(InputBatchRequest request)
+    {
+        // Prepare every replacement before touching either live port. Validation already guarantees
+        // unique ports and bounds; the install phase below is assignment-only and cannot partially fail.
+        var prepared = new (int Port, InputSegmentDto[] Segments, int Total)[request.Timelines.Length];
+        for (int index = 0; index < request.Timelines.Length; index++)
+        {
+            InputTimelineRequest timeline = request.Timelines[index];
+            InputSegmentDto[] segments = timeline.Segments.ToArray();
+            prepared[index] = (timeline.Port, segments, segments.Sum(segment => segment.Frames));
+        }
+        foreach (var item in prepared) _input[item.Port].ReplacePrepared(item.Segments, item.Total);
+        var operations = prepared.Select(item =>
+            new InputOperationDto(item.Port, item.Total, _frame)).ToArray();
+        return new InputBatchOperationDto(_frame, operations);
+    }
+
     OperationResultDto ClearInputResult()
     {
         ClearInput();
@@ -495,6 +537,9 @@ internal sealed class AutomationGameThread : IDisposable
 
     bool InputActive => _input[0].RemainingFrames > 0 || _input[1].RemainingFrames > 0;
 
+    internal (ushort Mask, int RemainingFrames)[] InputSnapshotForTests() =>
+        _input.Select(value => (value.Mask, value.RemainingFrames)).ToArray();
+
     void ClearInput()
     {
         _input[0].Clear();
@@ -527,10 +572,16 @@ internal sealed class AutomationGameThread : IDisposable
 
         public void Replace(InputSegmentDto[] segments)
         {
-            _segments = segments.ToArray();
+            InputSegmentDto[] prepared = segments.ToArray();
+            ReplacePrepared(prepared, prepared.Sum(segment => segment.Frames));
+        }
+
+        public void ReplacePrepared(InputSegmentDto[] segments, int totalFrames)
+        {
+            _segments = segments;
             _index = 0;
             _segmentFrames = _segments[0].Frames;
-            RemainingFrames = _segments.Sum(segment => segment.Frames);
+            RemainingFrames = totalFrames;
         }
 
         public void Advance()

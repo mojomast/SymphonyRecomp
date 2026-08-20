@@ -304,6 +304,11 @@ public sealed class ScenarioArtifactTests
             Task.FromResult(new InputOperationDto(request.Port,
                 request.Segments.Sum(segment => segment.Frames), _frame));
 
+        public Task<InputBatchOperationDto> RunInputBatchAsync(InputBatchRequest request, CancellationToken token) =>
+            Task.FromResult(new InputBatchOperationDto(_frame, request.Timelines.Select(timeline =>
+                new InputOperationDto(timeline.Port, timeline.Segments.Sum(segment => segment.Frames), _frame))
+                .ToArray()));
+
         public Task<OperationResultDto> ClearInputAsync(CancellationToken token)
         {
             ClearCalls++;

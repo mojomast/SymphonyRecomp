@@ -276,6 +276,7 @@ public sealed class AutomationBridge : IDisposable
             "mods.diagnostics.capture" => ReadModDiagnosticsCapture(parameters),
             "mods.diagnostics.reset" => ReadModDiagnosticsReset(parameters),
             "input.timeline" => ReadTimeline(parameters),
+            "input.batch" => ReadInputBatch(parameters),
             "runtime.hard_reset" => ReadConfirmation(parameters),
             _ => throw new AutomationValidationException("Unknown automation method."),
         };
@@ -363,6 +364,48 @@ public sealed class AutomationBridge : IDisposable
             RequireProperties(segment, ["buttons", "frames"], requireObject: true, requireAll: true);
         var value = parameters!.Value.Deserialize<InputTimelineRequest>(AutomationProtocol.Json)
             ?? throw new AutomationValidationException("Input timeline parameters are required.");
+        ValidateTimeline(value);
+        return new InputTimelineRequest(value.Port, value.Segments.ToArray());
+    }
+
+    static InputBatchRequest ReadInputBatch(JsonElement? parameters)
+    {
+        RequireProperties(parameters, ["timelines"], requireObject: true, requireAll: true);
+        if (!TryProperty(parameters!.Value, "timelines", out var timelines) ||
+            timelines.ValueKind != JsonValueKind.Array)
+            throw new AutomationValidationException("timelines must be an array.");
+        if (timelines.GetArrayLength() is < 1 or > 2)
+            throw new AutomationValidationException("timelines must contain one or two entries.");
+        foreach (var timeline in timelines.EnumerateArray())
+        {
+            RequireProperties(timeline, ["port", "segments"], requireObject: true, requireAll: true);
+            if (!TryProperty(timeline, "segments", out var segments) || segments.ValueKind != JsonValueKind.Array)
+                throw new AutomationValidationException("segments must be an array.");
+            foreach (var segment in segments.EnumerateArray())
+                RequireProperties(segment, ["buttons", "frames"], requireObject: true, requireAll: true);
+        }
+        var value = parameters.Value.Deserialize<InputBatchRequest>(AutomationProtocol.Json)
+            ?? throw new AutomationValidationException("Input batch parameters are required.");
+        if (value.Timelines is not { Length: > 0 and <= 2 })
+            throw new AutomationValidationException("timelines must contain one or two entries.");
+        var ports = new HashSet<int>();
+        var result = new InputTimelineRequest[value.Timelines.Length];
+        for (int index = 0; index < value.Timelines.Length; index++)
+        {
+            InputTimelineRequest timeline = value.Timelines[index];
+            ValidateTimeline(timeline);
+            if (!ports.Add(timeline.Port))
+                throw new AutomationValidationException("timelines must use unique ports.");
+            result[index] = new InputTimelineRequest(timeline.Port, timeline.Segments.ToArray());
+        }
+        return new InputBatchRequest(result);
+    }
+
+    internal static InputBatchRequest ValidateInputBatchForTests(JsonElement parameters) =>
+        ReadInputBatch(parameters);
+
+    static void ValidateTimeline(InputTimelineRequest value)
+    {
         if (value.Port is < 0 or > 1) throw new AutomationValidationException("port must be 0 or 1.");
         if (value.Segments is not { Length: > 0 and <= 120 })
             throw new AutomationValidationException("segments must contain 1 to 120 entries.");
@@ -374,7 +417,6 @@ public sealed class AutomationBridge : IDisposable
             catch (OverflowException) { throw new AutomationValidationException("Timeline duration is too large."); }
             if (total > 1800) throw new AutomationValidationException("Timeline duration cannot exceed 1800 frames.");
         }
-        return new InputTimelineRequest(value.Port, value.Segments.ToArray());
     }
 
     static void ValidateModId(string id)

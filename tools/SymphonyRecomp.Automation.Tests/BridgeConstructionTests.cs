@@ -2,6 +2,7 @@ using SymphonyRecomp.Automation;
 using SymphonyRecomp.Mcp;
 using RecompOne.Runtime.Events;
 using SymphonyRecomp.Automation.Contracts;
+using System.Text.Json;
 
 namespace SymphonyRecomp.Automation.Tests;
 
@@ -102,5 +103,57 @@ public sealed class BridgeConstructionTests
 
         string expanding = $$"""{"sessionId":"{{session}}","generation":3,"data":"{{new string('é', 11_000)}}"}""";
         Assert.ThrowsAny<Exception>(() => AutomationGameThread.ParseModDiagnostics("coop", 42, expanding));
+    }
+
+    [Fact]
+    public async Task AtomicInputBatchInstallsBothPortsAtOneFrameAndClearIsNeutral()
+    {
+        using var gameThread = new AutomationGameThread(static () => 0, static () => 0);
+        var request = new InputBatchRequest([
+            new InputTimelineRequest(0, [new InputSegmentDto(0x2000, 3)]),
+            new InputTimelineRequest(1, [new InputSegmentDto(0x0040, 5)])]);
+        var pending = new AutomationBridge.PendingCommand(new AutomationBridge.AutomationCommand(
+            "batch", "input.batch", request, 1000));
+
+        gameThread.Execute(pending);
+        AutomationResponse response = await pending.Completion.Task;
+        InputBatchOperationDto batch = response.Result!.Value.Deserialize<InputBatchOperationDto>(AutomationProtocol.Json)!;
+
+        Assert.True(response.Success);
+        Assert.Equal(2, batch.Operations.Length);
+        Assert.All(batch.Operations, operation => Assert.Equal(batch.StartsAfterFrame, operation.StartsAfterFrame));
+        Assert.Equal([(0x2000, 3), (0x0040, 5)], gameThread.InputSnapshotForTests()
+            .Select(value => ((int)value.Mask, value.RemainingFrames)));
+
+        var clear = new AutomationBridge.PendingCommand(new AutomationBridge.AutomationCommand(
+            "clear", "input.clear", null, 1000));
+        gameThread.Execute(clear);
+        Assert.True((await clear.Completion.Task).Success);
+        Assert.All(gameThread.InputSnapshotForTests(), value => Assert.Equal((0, 0), ((int)value.Mask, value.RemainingFrames)));
+    }
+
+    [Fact]
+    public void InputBatchValidationIsAllOrNothingClosedAndBounded()
+    {
+        JsonElement valid = JsonSerializer.SerializeToElement(new InputBatchRequest([
+            new InputTimelineRequest(0, [new InputSegmentDto(1, 1800)]),
+            new InputTimelineRequest(1, [new InputSegmentDto(2, 1)])]), AutomationProtocol.Json);
+        InputBatchRequest parsed = AutomationBridge.ValidateInputBatchForTests(valid);
+        Assert.Equal(2, parsed.Timelines.Length);
+
+        JsonElement duplicate = JsonSerializer.SerializeToElement(new InputBatchRequest([
+            new InputTimelineRequest(0, [new InputSegmentDto(1, 1)]),
+            new InputTimelineRequest(0, [new InputSegmentDto(2, 1)])]), AutomationProtocol.Json);
+        Assert.ThrowsAny<Exception>(() => AutomationBridge.ValidateInputBatchForTests(duplicate));
+
+        JsonElement invalidSecond = JsonSerializer.SerializeToElement(new InputBatchRequest([
+            new InputTimelineRequest(0, [new InputSegmentDto(1, 1)]),
+            new InputTimelineRequest(1, [new InputSegmentDto(2, 1801)])]), AutomationProtocol.Json);
+        Assert.ThrowsAny<Exception>(() => AutomationBridge.ValidateInputBatchForTests(invalidSecond));
+
+        using JsonDocument unknownDocument = JsonDocument.Parse("""
+            {"timelines":[{"port":0,"segments":[{"buttons":0,"frames":1}],"extra":true}]}
+            """);
+        Assert.ThrowsAny<Exception>(() => AutomationBridge.ValidateInputBatchForTests(unknownDocument.RootElement));
     }
 }

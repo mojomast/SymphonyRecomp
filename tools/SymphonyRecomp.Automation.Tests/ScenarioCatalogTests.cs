@@ -8,6 +8,24 @@ namespace SymphonyRecomp.Automation.Tests;
 public sealed class ScenarioCatalogTests
 {
     [Fact]
+    public void StableCatalogInventoryAndDescriptorFailuresAreClosed()
+    {
+        var catalog = new ScenarioCatalog();
+        Assert.Equal(new[] { "coop-locomotion-jump", "coop-transition-west", "coop-contact-hit",
+            "coop-projectile-hit", "coop-damage-revive", "coop-drop-observe" },
+            catalog.Inventory.Select(value => value.Id));
+        Assert.All(catalog.Inventory, entry => Assert.Equal(entry.Id, ScenarioParser.Parse(catalog.GetSource(entry.Id)).Id));
+
+        string resource = catalog.Inventory[0].ResourceName;
+        Assert.Throws<InvalidOperationException>(() => new ScenarioCatalog(typeof(ScenarioCatalog).Assembly,
+            [new("duplicate", "1", resource), new("duplicate", "2", resource + ".other")]));
+        Assert.Throws<InvalidOperationException>(() => new ScenarioCatalog(typeof(ScenarioCatalog).Assembly,
+            [new("missing", "1", "missing.resource")]));
+        Assert.Throws<InvalidOperationException>(() => new ScenarioCatalog(typeof(ScenarioCatalog).Assembly,
+            [new("wrong-id", "2", resource)]));
+    }
+
+    [Fact]
     public void EmbeddedCanonicalSourceHasExactTimelinePredicatesAndPolicy()
     {
         var catalog = new ScenarioCatalog();
@@ -16,9 +34,11 @@ public sealed class ScenarioCatalogTests
             catalog.GetSource(ScenarioCatalog.CoopLocomotionJumpId));
 
         Assert.Equal("coop-locomotion-jump", scenario.Id);
-        Assert.Equal("1", scenario.Version);
+        Assert.Equal("2", scenario.Version);
+        Assert.Equal(ScenarioParser.SchemaV2, scenario.Schema);
+        Assert.Equal(DiagnosticsResetPolicy.Before, scenario.DiagnosticsReset);
         Assert.Equal("coop-feasibility", scenario.ModId);
-        Assert.Equal(128, scenario.TotalInputFrames);
+        Assert.Equal(144, scenario.TotalInputFrames);
         Assert.DoesNotContain(scenario.Start.Predicates.OfType<GameScenarioPredicate>(),
             predicate => predicate.Field == GamePredicateField.Stage);
         AssertGame(scenario.Start, GamePredicateField.State, text: "Play");
@@ -30,24 +50,24 @@ public sealed class ScenarioCatalogTests
             predicate => predicate.Field == GamePredicateField.PlayerHasControl);
         AssertDiagnostic(scenario.Start, "H", result: DiagnosticResult.Pass);
         AssertDiagnostic(scenario.Start, "K", exact: "-");
-        AssertDiagnostic(scenario.Start, "E", exact: "0");
+        AssertMetric(scenario.Start, "errorCode", MetricOperator.Eq);
 
         ScenarioStep step = Assert.Single(scenario.Steps);
         Assert.Equal("locomotion-jump", step.Id);
         ScenarioInput port0 = Assert.Single(step.Inputs, input => input.Port == 0);
-        Assert.Equal(64, port0.TotalFrames);
+        Assert.Equal(72, port0.TotalFrames);
         InputSegmentDto neutral = Assert.Single(port0.Timeline);
         Assert.Equal((ushort)0, neutral.Buttons);
-        Assert.Equal(64, neutral.Frames);
+        Assert.Equal(72, neutral.Frames);
 
         ScenarioInput port1 = Assert.Single(step.Inputs, input => input.Port == 1);
-        Assert.Equal(64, port1.TotalFrames);
-        Assert.Equal(new ushort[] { 0x2000, 0, 0x8000, 0, 0x0040, 0 },
+        Assert.Equal(72, port1.TotalFrames);
+        Assert.Equal(new ushort[] { 0, 0x2000, 0, 0x8000, 0, 0x0040, 0 },
             port1.Timeline.Select(segment => segment.Buttons));
-        Assert.Equal(new[] { 12, 4, 12, 4, 1, 31 },
+        Assert.Equal(new[] { 8, 12, 4, 12, 4, 2, 30 },
             port1.Timeline.Select(segment => segment.Frames));
         AssertDiagnostic(step.Checkpoint, "M", result: DiagnosticResult.Pass);
-        AssertDiagnostic(step.Checkpoint, "E", exact: "0");
+        AssertMetric(step.Checkpoint, "attackOrphanMarkerCount", MetricOperator.Eq);
         Assert.DoesNotContain(step.Checkpoint.Predicates.OfType<DiagnosticScenarioPredicate>(),
             predicate => predicate.Field == "J");
         Assert.Equal(new[] { ScenarioArtifact.State, ScenarioArtifact.Diagnostics,
@@ -55,6 +75,39 @@ public sealed class ScenarioCatalogTests
             scenario.Artifacts.OnFailure);
         Assert.Equal(new[] { ScenarioArtifact.State, ScenarioArtifact.Diagnostics },
             scenario.Artifacts.OnSuccess);
+    }
+
+    [Fact]
+    public void M5ProbesUseTelemetryStageNamesAndHonestTransitionTimelines()
+    {
+        var catalog = new ScenarioCatalog();
+        foreach (string id in new[] { "coop-transition-west", "coop-contact-hit",
+                     "coop-projectile-hit", "coop-damage-revive" })
+        {
+            ScenarioDefinition probe = ScenarioParser.Parse(catalog.GetSource(id));
+            AssertGame(probe.Start, GamePredicateField.Stage, text: "MarbleGallery");
+        }
+
+        foreach (string id in new[] { "coop-contact-hit", "coop-projectile-hit" })
+        {
+            ScenarioDefinition probe = ScenarioParser.Parse(catalog.GetSource(id));
+            AssertDiagnostic(probe.Start, "EN", result: DiagnosticResult.Pass);
+        }
+
+        ScenarioDefinition transition = ScenarioParser.Parse(catalog.GetSource("coop-transition-west"));
+        Assert.Equal("3", transition.Version);
+        Assert.Contains("no more than 8 walkable world pixels", transition.Description);
+        AssertGame(transition.Start, GamePredicateField.RoomX, integer: 32);
+        AssertGame(transition.Start, GamePredicateField.RoomY, integer: 26);
+        ScenarioStep step = Assert.Single(transition.Steps);
+        ScenarioInput p1 = Assert.Single(step.Inputs, input => input.Port == 0);
+        ScenarioInput p2 = Assert.Single(step.Inputs, input => input.Port == 1);
+        Assert.Equal(new[] { 8, 4, 108 }, p1.Timeline.Select(value => value.Frames));
+        Assert.Equal(new[] { 76, 8, 36 }, p2.Timeline.Select(value => value.Frames));
+        Assert.Equal((ushort)0x8000, p2.Timeline[1].Buttons);
+        AssertMetric(step.Checkpoint, "postTransitionCommandedPixels", MetricOperator.DeltaGte);
+        AssertMetric(step.Checkpoint, "postTransitionMoved", MetricOperator.Eq);
+        AssertMetric(step.Checkpoint, "transitionPending", MetricOperator.Eq);
     }
 
     [Fact]
@@ -117,12 +170,13 @@ public sealed class ScenarioCatalogTests
     }
 
     private static void AssertGame(ScenarioCheckpoint checkpoint, GamePredicateField field,
-        string? text = null, bool? boolean = null)
+        string? text = null, bool? boolean = null, long? integer = null)
     {
         GameScenarioPredicate predicate = Assert.Single(
             checkpoint.Predicates.OfType<GameScenarioPredicate>(), value => value.Field == field);
         Assert.Equal(text, predicate.Expected.String);
         Assert.Equal(boolean, predicate.Expected.Boolean);
+        Assert.Equal(integer, predicate.Expected.SignedInteger);
     }
 
     private static void AssertDiagnostic(ScenarioCheckpoint checkpoint, string field,
@@ -130,9 +184,17 @@ public sealed class ScenarioCatalogTests
     {
         DiagnosticScenarioPredicate predicate = Assert.Single(
             checkpoint.Predicates.OfType<DiagnosticScenarioPredicate>(), value => value.Field == field);
-        Assert.Equal("p2d4/1", predicate.Schema);
+        Assert.Equal("p2d4/2", predicate.Schema);
         Assert.Equal(exact, predicate.ExactValue);
         Assert.Equal(result, predicate.Result);
+    }
+
+    private static void AssertMetric(ScenarioCheckpoint checkpoint, string name, MetricOperator operation)
+    {
+        MetricScenarioPredicate predicate = Assert.Single(
+            checkpoint.Predicates.OfType<MetricScenarioPredicate>(), value => value.Name == name);
+        Assert.Equal("p2d4/2", predicate.Schema);
+        Assert.Equal(operation, predicate.Operator);
     }
 
     private sealed class FakeExecutionService : IScenarioExecutionService
@@ -158,8 +220,9 @@ public sealed class ScenarioCatalogTests
             var run = new ScenarioRunResult(ScenarioRunOutcome.Passed, null, [], 1, 65, [],
                 null, null, null, true, true, true, null);
             var manifest = new ScenarioArtifactManifest(ScenarioExecutionService.ManifestSchema,
-                "artifact-test", new ScenarioSourceIdentity(ScenarioParser.Schema,
-                    ScenarioCatalog.CoopLocomotionJumpId, "1", new string('a', 64)),
+                "artifact-test", new ScenarioSourceIdentity(ScenarioParser.SchemaV2,
+                    ScenarioCatalog.CoopLocomotionJumpId, ScenarioCatalog.CoopLocomotionJumpVersion,
+                    new string('a', 64)),
                 new ScenarioRuntimeIdentity("1", "test", AutomationProtocol.Version, null,
                     null, null, "running"), null, null, DateTimeOffset.UnixEpoch,
                 DateTimeOffset.UnixEpoch, "Passed", null, null, 1, 65,

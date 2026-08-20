@@ -6,7 +6,7 @@ namespace SymphonyRecomp.Automation.Contracts;
 
 public static class AutomationProtocol
 {
-    public const string Version = "1.1";
+    public const string Version = "1.2";
     public const int MaxFrameBytes = 16 * 1024 * 1024;
 
     public static JsonSerializerOptions Json { get; } = new(JsonSerializerDefaults.Web)
@@ -233,5 +233,7 @@ public sealed record ConfirmRequest(bool Confirm);
 public sealed record InputTimelineRequest(int Port, InputSegmentDto[] Segments);
 public sealed record InputSegmentDto(ushort Buttons, int Frames);
 public sealed record InputOperationDto(int Port, int TotalFrames, long StartsAfterFrame);
+public sealed record InputBatchRequest(InputTimelineRequest[] Timelines);
+public sealed record InputBatchOperationDto(long StartsAfterFrame, InputOperationDto[] Operations);
 
 public sealed record OperationResultDto(bool Applied, long Frame, string Message);

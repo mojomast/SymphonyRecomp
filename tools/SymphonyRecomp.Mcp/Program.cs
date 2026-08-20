@@ -5,6 +5,7 @@ using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 using SymphonyRecomp.Mcp;
 using SymphonyRecomp.Mcp.Scenarios;
+using SymphonyRecomp.Mcp.Campaigns;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -50,6 +51,7 @@ await app.RunAsync();
 
 static IMcpServerBuilder AddMcpServices(IServiceCollection services)
 {
+    services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
     services.AddSingleton<GameProcessManager>();
     services.AddSingleton<GameAutomationClient>();
     services.AddSingleton<ScenarioAutomationClient>();
@@ -61,6 +63,10 @@ static IMcpServerBuilder AddMcpServices(IServiceCollection services)
     services.AddSingleton<ScenarioExecutionService>();
     services.AddSingleton<IScenarioExecutionService>(provider =>
         provider.GetRequiredService<ScenarioExecutionService>());
+    services.AddSingleton<CampaignCatalog>();
+    services.AddSingleton<ICampaignClock, SystemCampaignClock>();
+    services.AddSingleton<CampaignService>();
+    services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<CampaignService>());
     var toolJson = new JsonSerializerOptions(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,

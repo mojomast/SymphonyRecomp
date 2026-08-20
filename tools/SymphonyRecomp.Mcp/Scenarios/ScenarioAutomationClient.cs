@@ -20,6 +20,9 @@ public sealed class ScenarioAutomationClient(GameAutomationClient client, GamePr
     public Task<InputOperationDto> RunInputAsync(InputTimelineRequest request, CancellationToken token) =>
         client.RunInputAsync(request, token);
 
+    public Task<InputBatchOperationDto> RunInputBatchAsync(InputBatchRequest request, CancellationToken token) =>
+        client.RunInputBatchAsync(request, token);
+
     public Task<OperationResultDto> ClearInputAsync(CancellationToken token) => client.ClearInputAsync(token);
     public Task<ModTelemetryDto[]> ListModsAsync(CancellationToken token) => client.ListModsAsync(token);
     public Task<EntityListDto> ListEntitiesAsync(int maximum, CancellationToken token) =>

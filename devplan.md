@@ -1,0 +1,20 @@
+- [✅] Implement co-op v0.4.0 combat diagnostics, CEN awareness, profile/projectile combat, visuals, HUD, P2D4 reporting, and documentation
+- [✅] Implement M4 closure slice 2 managed movement-session lifecycle and transactional reconstruction
+- [✅] Fix fatal-to-diagnostic-reset movement-session recovery atomically
+- [✅] Implement and validate M4 closure slice 3 attack publication/window orchestration
+- [✅] Resolve M4 attack publication transactional rollback and unload review blockers
+- [✅] Resolve M4 invalid-event cleanup, target-read orchestration, and allocation blockers
+- [✅] Resolve M4 reconstruction production transaction and hook-adapter evidence blockers
+- [✅] Resolve M4 attack diagnostic-reset ownership-loss blocker
+- [✅] Eliminate per-collision CpuContext snapshot allocation with cross-API guard evidence
+- [✅] Resolve final M4 attack reset prepared-transition atomicity blockers
+- [✅] Extend atomic diagnostic reset preparation across all revisioned reducers
+- [✅] Close direct collision dispatch and best-effort scratch restoration blockers
+- [✅] Complete guarded direct dispatch and restoration for attack guest paths
+- [✅] Implement M5 slice 2 transition, tether, suspension, visible-status, route, and readiness corrections
+- [✅] Implement M5 slice 3 review fixes, metric deltas, corrected probes, drop observation, and route ingestion
+- [✅] Implement M5 slice 4 persisted Pad 2 preference, observer campaigns, private artifacts, and release matrix
+- [✅] Resolve final campaign safety, strict diagnostics, shutdown, overflow, artifact, manifest, and validation blockers
+- [✅] Fix native Alucard liveness for telemetry and managed revive, validate, and record live blocker evidence
+- [✅] Bound unsupported-terrain reconstruction retries and reconcile final live evidence
+- [✅] Enforce exact-owned attack lifetime and guaranteed minute-60 campaign sampling

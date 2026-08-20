@@ -6,7 +6,9 @@ namespace SymphonyRecomp.Mcp.Scenarios;
 
 public static class ScenarioParser
 {
-    public const string Schema = "sotn-scenario/1";
+    public const string SchemaV1 = "sotn-scenario/1";
+    public const string SchemaV2 = "sotn-scenario/2";
+    public const string Schema = SchemaV1;
     public const int MaximumSourceBytes = 256 * 1024;
 
     private static readonly IReadOnlyDictionary<string, ushort> ButtonBits =
@@ -43,16 +45,22 @@ public static class ScenarioParser
         {
             RejectDuplicateProperties(document.RootElement, "$");
             JsonElement root = RequireObject(document.RootElement, "$");
-            RequireProperties(root, "$", ["schema", "id", "version", "description", "modId", "timeoutMs", "start", "steps", "artifacts"]);
-
             string schema = RequireString(root, "schema", "$", 32);
-            if (schema != Schema) throw new FormatException($"$.schema must be exactly '{Schema}'.");
+            if (schema is not (SchemaV1 or SchemaV2))
+                throw new FormatException($"$.schema must be exactly '{SchemaV1}' or '{SchemaV2}'.");
+            bool v2 = schema == SchemaV2;
+            RequireProperties(root, "$", v2
+                ? ["schema", "id", "version", "description", "modId", "timeoutMs", "diagnosticsReset", "start", "steps", "artifacts"]
+                : ["schema", "id", "version", "description", "modId", "timeoutMs", "start", "steps", "artifacts"]);
             string id = RequireId(root, "id", "$", 64);
             string version = RequireId(root, "version", "$", 32);
             string description = RequirePrintable(root, "description", "$", 512, allowEmpty: false);
             string modId = RequireId(root, "modId", "$", 128);
             int timeoutMs = RequireInt32(root, "timeoutMs", "$", 1, 120000);
-            ScenarioCheckpoint start = ParseCheckpoint(Required(root, "start", "$"), "$.start");
+            DiagnosticsResetPolicy resetPolicy = v2
+                ? ParseResetPolicy(RequireString(root, "diagnosticsReset", "$", 16), "$.diagnosticsReset")
+                : DiagnosticsResetPolicy.Before;
+            ScenarioCheckpoint start = ParseCheckpoint(Required(root, "start", "$"), "$.start", v2);
 
             JsonElement stepsElement = RequireArray(Required(root, "steps", "$"), "$.steps", 1, 32);
             var steps = new ScenarioStep[stepsElement.GetArrayLength()];
@@ -63,7 +71,7 @@ public static class ScenarioParser
             foreach (JsonElement element in stepsElement.EnumerateArray())
             {
                 string path = $"$.steps[{stepIndex}]";
-                ScenarioStep step = ParseStep(element, path, ref totalInputFrames);
+                ScenarioStep step = ParseStep(element, path, ref totalInputFrames, v2);
                 if (!stepIds.Add(step.Id)) throw new FormatException($"{path}.id is duplicated.");
                 totalPredicates += step.Checkpoint.Predicates.Count;
                 if (totalPredicates > 128) throw new FormatException("Scenario checkpoints cannot contain more than 128 predicates total.");
@@ -71,11 +79,12 @@ public static class ScenarioParser
             }
 
             ScenarioArtifactPolicy artifacts = ParseArtifacts(Required(root, "artifacts", "$"), "$.artifacts");
-            return new ScenarioDefinition(schema, id, version, description, modId, timeoutMs, start, steps, artifacts, totalInputFrames);
+            return new ScenarioDefinition(schema, id, version, description, modId, timeoutMs, resetPolicy,
+                start, steps, artifacts, totalInputFrames);
         }
     }
 
-    private static ScenarioStep ParseStep(JsonElement element, string path, ref int totalInputFrames)
+    private static ScenarioStep ParseStep(JsonElement element, string path, ref int totalInputFrames, bool v2)
     {
         JsonElement value = RequireObject(element, path);
         RequireProperties(value, path, ["id", "inputs", "checkpoint"]);
@@ -92,7 +101,7 @@ public static class ScenarioParser
             inputs[index++] = input;
         }
 
-        ScenarioCheckpoint checkpoint = ParseCheckpoint(Required(value, "checkpoint", path), $"{path}.checkpoint");
+        ScenarioCheckpoint checkpoint = ParseCheckpoint(Required(value, "checkpoint", path), $"{path}.checkpoint", v2);
         return new ScenarioStep(id, inputs, checkpoint);
     }
 
@@ -143,7 +152,7 @@ public static class ScenarioParser
         return mask;
     }
 
-    private static ScenarioCheckpoint ParseCheckpoint(JsonElement element, string path)
+    private static ScenarioCheckpoint ParseCheckpoint(JsonElement element, string path, bool v2)
     {
         JsonElement value = RequireObject(element, path);
         RequireProperties(value, path, ["timeoutFrames", "predicates"]);
@@ -152,24 +161,25 @@ public static class ScenarioParser
         var predicates = new ScenarioPredicate[predicateElements.GetArrayLength()];
         int index = 0;
         foreach (JsonElement predicate in predicateElements.EnumerateArray())
-            predicates[index] = ParsePredicate(predicate, $"{path}.predicates[{index++}]");
+            predicates[index] = ParsePredicate(predicate, $"{path}.predicates[{index++}]", v2);
         return new ScenarioCheckpoint(timeoutFrames, predicates);
     }
 
-    private static ScenarioPredicate ParsePredicate(JsonElement element, string path)
+    private static ScenarioPredicate ParsePredicate(JsonElement element, string path, bool v2)
     {
         JsonElement value = RequireObject(element, path);
         JsonElement typeElement = Required(value, "type", path);
         if (typeElement.ValueKind != JsonValueKind.String) throw new FormatException($"{path}.type must be a string.");
         return typeElement.GetString() switch
         {
-            "game" => ParseGamePredicate(value, path),
+            "game" => ParseGamePredicate(value, path, v2),
             "diagnostic" => ParseDiagnosticPredicate(value, path),
-            _ => throw new FormatException($"{path}.type must be 'game' or 'diagnostic'."),
+            "metric" when v2 => ParseMetricPredicate(value, path),
+            _ => throw new FormatException($"{path}.type is not supported by this scenario schema."),
         };
     }
 
-    private static GameScenarioPredicate ParseGamePredicate(JsonElement value, string path)
+    private static GameScenarioPredicate ParseGamePredicate(JsonElement value, string path, bool v2)
     {
         RequireProperties(value, path, ["type", "field", "equals"]);
         string fieldText = RequireString(value, "field", path, 32);
@@ -184,6 +194,10 @@ public static class ScenarioParser
             "menuOpen" => GamePredicateField.MenuOpen,
             "mapOpen" => GamePredicateField.MapOpen,
             "playerHasControl" => GamePredicateField.PlayerHasControl,
+            "area" when v2 => GamePredicateField.Area,
+            "room" when v2 => GamePredicateField.Room,
+            "roomX" when v2 => GamePredicateField.RoomX,
+            "roomY" when v2 => GamePredicateField.RoomY,
             _ => throw new FormatException($"{path}.field is not a supported game field."),
         };
         JsonElement equals = Required(value, "equals", path);
@@ -193,10 +207,53 @@ public static class ScenarioParser
                 new ScenarioScalar(RequirePrintableString(equals, $"{path}.equals", 64, false), null, null),
             GamePredicateField.GameStepRaw or GamePredicateField.EngineStepRaw =>
                 new ScenarioScalar(null, RequireUInt32(equals, $"{path}.equals"), null),
+            GamePredicateField.Area or GamePredicateField.Room or GamePredicateField.RoomX or GamePredicateField.RoomY =>
+                new ScenarioScalar(null, null, null, RequireInt64(equals, $"{path}.equals")),
             _ => new ScenarioScalar(null, null, RequireBoolean(equals, $"{path}.equals")),
         };
         return new GameScenarioPredicate(field, scalar);
     }
+
+    private static MetricScenarioPredicate ParseMetricPredicate(JsonElement value, string path)
+    {
+        RequireProperties(value, path, ["type", "schema", "name", "operator", "value"]);
+        string schema = RequirePrintable(value, "schema", path, 64, allowEmpty: false);
+        if (schema != "p2d4/2") throw new FormatException($"{path}.schema must be exactly 'p2d4/2'.");
+        string name = RequireId(value, "name", path, 64);
+        if (!ScenarioMetricContract.Types.TryGetValue(name, out MetricScalarType type))
+            throw new FormatException($"{path}.name is not a supported metric.");
+        MetricOperator operation = RequireString(value, "operator", path, 8) switch
+        {
+            "eq" => MetricOperator.Eq,
+            "ne" => MetricOperator.Ne,
+            "gte" => MetricOperator.Gte,
+            "lte" => MetricOperator.Lte,
+            "deltaEq" => MetricOperator.DeltaEq,
+            "deltaGte" => MetricOperator.DeltaGte,
+            "deltaLte" => MetricOperator.DeltaLte,
+            _ => throw new FormatException($"{path}.operator is not supported."),
+        };
+        if (type != MetricScalarType.Integer && operation is MetricOperator.Gte or MetricOperator.Lte or
+            MetricOperator.DeltaEq or MetricOperator.DeltaGte or MetricOperator.DeltaLte)
+            throw new FormatException($"{path}.operator requires an integer metric.");
+        JsonElement expected = Required(value, "value", path);
+        ScenarioScalar scalar = type switch
+        {
+            MetricScalarType.Integer => new ScenarioScalar(null, null, null, RequireInt64(expected, $"{path}.value")),
+            MetricScalarType.Boolean => new ScenarioScalar(null, null, RequireBoolean(expected, $"{path}.value"), null),
+            MetricScalarType.String => new ScenarioScalar(
+                RequirePrintableString(expected, $"{path}.value", 256, true), null, null, null),
+            _ => throw new FormatException($"{path}.value has an unsupported type."),
+        };
+        return new MetricScenarioPredicate(schema, name, operation, type, scalar);
+    }
+
+    private static DiagnosticsResetPolicy ParseResetPolicy(string value, string path) => value switch
+    {
+        "before" => DiagnosticsResetPolicy.Before,
+        "none" => DiagnosticsResetPolicy.None,
+        _ => throw new FormatException($"{path} must be 'before' or 'none'."),
+    };
 
     private static DiagnosticScenarioPredicate ParseDiagnosticPredicate(JsonElement value, string path)
     {
@@ -337,7 +394,15 @@ public static class ScenarioParser
 
     private static uint RequireUInt32(JsonElement value, string path)
     {
-        if (!value.TryGetUInt32(out uint result)) throw new FormatException($"{path} must be an unsigned 32-bit integer.");
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetUInt32(out uint result))
+            throw new FormatException($"{path} must be an unsigned 32-bit integer.");
+        return result;
+    }
+
+    private static long RequireInt64(JsonElement value, string path)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out long result))
+            throw new FormatException($"{path} must be a signed 64-bit integer.");
         return result;
     }
 
@@ -356,6 +421,7 @@ public sealed record ScenarioDefinition(
     string Description,
     string ModId,
     int TimeoutMs,
+    DiagnosticsResetPolicy DiagnosticsReset,
     ScenarioCheckpoint Start,
     IReadOnlyList<ScenarioStep> Steps,
     ScenarioArtifactPolicy Artifacts,
@@ -367,7 +433,9 @@ public sealed record ScenarioCheckpoint(int TimeoutFrames, IReadOnlyList<Scenari
 public abstract record ScenarioPredicate;
 public sealed record GameScenarioPredicate(GamePredicateField Field, ScenarioScalar Expected) : ScenarioPredicate;
 public sealed record DiagnosticScenarioPredicate(string Schema, string Field, string? ExactValue, DiagnosticResult? Result) : ScenarioPredicate;
-public sealed record ScenarioScalar(string? String, uint? UnsignedInteger, bool? Boolean);
+public sealed record MetricScenarioPredicate(string Schema, string Name, MetricOperator Operator,
+    MetricScalarType ScalarType, ScenarioScalar Expected) : ScenarioPredicate;
+public sealed record ScenarioScalar(string? String, uint? UnsignedInteger, bool? Boolean, long? SignedInteger = null);
 public sealed record ScenarioArtifactPolicy(IReadOnlyList<ScenarioArtifact> OnFailure, IReadOnlyList<ScenarioArtifact> OnSuccess);
 
 public enum GamePredicateField
@@ -381,7 +449,121 @@ public enum GamePredicateField
     MenuOpen,
     MapOpen,
     PlayerHasControl,
+    Area,
+    Room,
+    RoomX,
+    RoomY,
 }
 
 public enum DiagnosticResult { Pass, Wait, Fail }
 public enum ScenarioArtifact { State, Diagnostics, Entities, Logs, Screenshot }
+public enum DiagnosticsResetPolicy { Before, None }
+public enum MetricOperator { Eq, Ne, Gte, Lte, DeltaEq, DeltaGte, DeltaLte }
+public enum MetricScalarType { Integer, Boolean, String }
+
+public static class ScenarioMetricContract
+{
+    public static IReadOnlyDictionary<string, MetricScalarType> Types { get; } =
+        new Dictionary<string, MetricScalarType>(StringComparer.Ordinal)
+        {
+            ["sessionRoomEpoch"] = MetricScalarType.Integer,
+            ["transitionPassed"] = MetricScalarType.Integer,
+            ["transitionCompleted"] = MetricScalarType.Integer,
+            ["reconstructionAttempts"] = MetricScalarType.Integer,
+            ["reconstructionSuccesses"] = MetricScalarType.Integer,
+            ["reconstructionFailures"] = MetricScalarType.Integer,
+            ["reconstructionRetryCooldown"] = MetricScalarType.Integer,
+            ["reconstructionRetries"] = MetricScalarType.Integer,
+            ["reconstructionSuppressedAttempts"] = MetricScalarType.Integer,
+            ["reconstructionSuspensionReasonCode"] = MetricScalarType.Integer,
+            ["transitionPending"] = MetricScalarType.Boolean,
+            ["awaitingPostTransitionMovement"] = MetricScalarType.Boolean,
+            ["tetherRecoveries"] = MetricScalarType.Integer,
+            ["postTransitionCommandedPixels"] = MetricScalarType.Integer,
+            ["postTransitionMoved"] = MetricScalarType.Boolean,
+            ["transitionPendingUpdates"] = MetricScalarType.Integer,
+            ["transitionPendingMaxUpdates"] = MetricScalarType.Integer,
+            ["postTransitionAbandonments"] = MetricScalarType.Integer,
+            ["transitionReconstructionFailures"] = MetricScalarType.Integer,
+            ["tetherPhase"] = MetricScalarType.Integer,
+            ["tetherReasonCode"] = MetricScalarType.Integer,
+            ["tetherWarningEntries"] = MetricScalarType.Integer,
+            ["tetherResistanceEntries"] = MetricScalarType.Integer,
+            ["tetherReconstructionEntries"] = MetricScalarType.Integer,
+            ["tetherSuspensionEntries"] = MetricScalarType.Integer,
+            ["tetherWarningFrames"] = MetricScalarType.Integer,
+            ["tetherWarningMaxConsecutive"] = MetricScalarType.Integer,
+            ["tetherResistanceFrames"] = MetricScalarType.Integer,
+            ["tetherResistanceMaxConsecutive"] = MetricScalarType.Integer,
+            ["tetherReconstructionFrames"] = MetricScalarType.Integer,
+            ["tetherReconstructionMaxConsecutive"] = MetricScalarType.Integer,
+            ["tetherSuspensionFrames"] = MetricScalarType.Integer,
+            ["tetherSuspensionMaxConsecutive"] = MetricScalarType.Integer,
+            ["tetherOutwardResistance"] = MetricScalarType.Boolean,
+            ["tetherStatusEligible"] = MetricScalarType.Integer,
+            ["tetherStatusSubmitted"] = MetricScalarType.Integer,
+            ["tetherHardRecoveries"] = MetricScalarType.Integer,
+            ["healthHp"] = MetricScalarType.Integer,
+            ["healthDowned"] = MetricScalarType.Boolean,
+            ["healthDamageEvents"] = MetricScalarType.Integer,
+            ["healthDamageConsumed"] = MetricScalarType.Integer,
+            ["healthSuppressions"] = MetricScalarType.Integer,
+            ["healthHitSuppressions"] = MetricScalarType.Integer,
+            ["healthDowns"] = MetricScalarType.Integer,
+            ["healthReviveStarts"] = MetricScalarType.Integer,
+            ["healthReviveCancels"] = MetricScalarType.Integer,
+            ["healthRevives"] = MetricScalarType.Integer,
+            ["healthRecoveries"] = MetricScalarType.Integer,
+            ["healthInvariantFailures"] = MetricScalarType.Integer,
+            ["attackAllocations"] = MetricScalarType.Integer,
+            ["attackContactAllocations"] = MetricScalarType.Integer,
+            ["attackProjectileAllocations"] = MetricScalarType.Integer,
+            ["attackCleanups"] = MetricScalarType.Integer,
+            ["attackLifecycleCancellations"] = MetricScalarType.Integer,
+            ["attackFailures"] = MetricScalarType.Integer,
+            ["attackTimingFailures"] = MetricScalarType.Integer,
+            ["attackContactWindows"] = MetricScalarType.Integer,
+            ["attackProjectileWindows"] = MetricScalarType.Integer,
+            ["attackContactNativeHits"] = MetricScalarType.Integer,
+            ["attackProjectileNativeHits"] = MetricScalarType.Integer,
+            ["attackProjectileLifetime"] = MetricScalarType.Integer,
+            ["attackExactOwnedLifetimeCurrent"] = MetricScalarType.Integer,
+            ["attackExactOwnedLifetimeMaximum"] = MetricScalarType.Integer,
+            ["attackQuarantineSlot"] = MetricScalarType.Integer,
+            ["attackCleanupPending"] = MetricScalarType.Boolean,
+            ["attackEquipmentRestoreFailures"] = MetricScalarType.Integer,
+            ["attackMarkerCount"] = MetricScalarType.Integer,
+            ["attackOrphanMarkerCount"] = MetricScalarType.Integer,
+            ["attackTargetOverflowEvents"] = MetricScalarType.Integer,
+            ["compatibleTargetCurrent"] = MetricScalarType.Integer,
+            ["enemyNativeHits"] = MetricScalarType.Integer,
+            ["enemyDefeats"] = MetricScalarType.Integer,
+            ["enemyZeroHpHits"] = MetricScalarType.Integer,
+            ["dropScans"] = MetricScalarType.Integer,
+            ["dropActive"] = MetricScalarType.Integer,
+            ["dropMaximumActive"] = MetricScalarType.Integer,
+            ["dropPrizeSpawns"] = MetricScalarType.Integer,
+            ["dropEquipmentSpawns"] = MetricScalarType.Integer,
+            ["dropP2AssociatedSpawns"] = MetricScalarType.Integer,
+            ["dropAmbientSpawns"] = MetricScalarType.Integer,
+            ["dropAmbiguousSpawns"] = MetricScalarType.Integer,
+            ["dropCausalDefeatsWithoutDrop"] = MetricScalarType.Integer,
+            ["dropTrackerOverflowEvents"] = MetricScalarType.Integer,
+            ["dropTrackerFaulted"] = MetricScalarType.Boolean,
+            ["dropCollections"] = MetricScalarType.Integer,
+            ["dropExpirations"] = MetricScalarType.Integer,
+            ["dropLifecycleDisappears"] = MetricScalarType.Integer,
+            ["dropReuses"] = MetricScalarType.Integer,
+            ["dropUnresolvedPickups"] = MetricScalarType.Integer,
+            ["observedNativeExpEvents"] = MetricScalarType.Integer,
+            ["observedNativeExpDelta"] = MetricScalarType.Integer,
+            ["contactGuardChecks"] = MetricScalarType.Integer,
+            ["contactGuardFailures"] = MetricScalarType.Integer,
+            ["contactSuspended"] = MetricScalarType.Boolean,
+            ["collisionRestoreFailures"] = MetricScalarType.Integer,
+            ["visualRestoreFailures"] = MetricScalarType.Integer,
+            ["fatal"] = MetricScalarType.Boolean,
+            ["errorCode"] = MetricScalarType.String,
+            ["configuredProcessedPad2Available"] = MetricScalarType.Boolean,
+        };
+}

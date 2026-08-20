@@ -1,0 +1,15 @@
+{
+  "schema": "sotn-campaign/1",
+  "id": "coop-route-25",
+  "version": "1",
+  "kind": "route",
+  "modId": "coop-feasibility",
+  "routeVersion": "no0-marble-gallery-candidate/1",
+  "routeFingerprint": "34d38244074a0ea351c1374479cafa003bd1a21332e53554fbfba84e30591bac",
+  "requiredTransitions": 25,
+  "deadlineSeconds": 1800,
+  "pollMilliseconds": 100,
+  "stage": "MarbleGallery",
+  "area": 0,
+  "orderedRooms": [9, 10, 5, 6, 5, 10, 9, 19, 11, 19, 9]
+}

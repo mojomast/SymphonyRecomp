@@ -258,5 +258,83 @@ public sealed class ScenarioParserTests
         Assert.Throws<FormatException>(() => ScenarioParser.Parse(root.ToJsonString()));
     }
 
+    [Fact]
+    public void V2AddsClosedTypedMetricsRoomFieldsAndResetPolicy()
+    {
+        JsonObject root = ParseV2Root();
+        ScenarioDefinition scenario = ScenarioParser.Parse(root.ToJsonString());
+
+        Assert.Equal(ScenarioParser.SchemaV2, scenario.Schema);
+        Assert.Equal(DiagnosticsResetPolicy.None, scenario.DiagnosticsReset);
+        var area = Assert.IsType<GameScenarioPredicate>(scenario.Start.Predicates[0]);
+        Assert.Equal(GamePredicateField.Area, area.Field);
+        Assert.Equal(0, area.Expected.SignedInteger);
+        var metric = Assert.IsType<MetricScenarioPredicate>(scenario.Start.Predicates[1]);
+        Assert.Equal("attackContactNativeHits", metric.Name);
+        Assert.Equal(MetricOperator.Gte, metric.Operator);
+        Assert.Equal(1, metric.Expected.SignedInteger);
+    }
+
+    [Theory]
+    [InlineData("unknownMetric", "gte", "1")]
+    [InlineData("fatal", "gte", "false")]
+    [InlineData("healthHp", "contains", "1")]
+    [InlineData("healthHp", "gte", "9223372036854775808")]
+    [InlineData("healthHp", "gte", "true")]
+    public void V2RejectsUnknownMismatchedOverflowingMetrics(string name, string operation, string value)
+    {
+        JsonObject root = ParseV2Root();
+        JsonObject metric = (JsonObject)((JsonArray)root["start"]!["predicates"]!)[1]!;
+        metric["name"] = name;
+        metric["operator"] = operation;
+        metric["value"] = JsonNode.Parse(value);
+        Assert.Throws<FormatException>(() => ScenarioParser.Parse(root.ToJsonString()));
+    }
+
+    [Theory]
+    [InlineData("deltaEq", -2)]
+    [InlineData("deltaGte", 1)]
+    [InlineData("deltaLte", 0)]
+    public void V2AcceptsSignedIntegerDeltaOperators(string operation, long expected)
+    {
+        JsonObject root = ParseV2Root();
+        JsonObject metric = (JsonObject)((JsonArray)root["start"]!["predicates"]!)[1]!;
+        metric["operator"] = operation;
+        metric["value"] = expected;
+        Assert.StartsWith("Delta", ScenarioParser.Parse(root.ToJsonString()).Start.Predicates
+            .OfType<MetricScenarioPredicate>().Single().Operator.ToString());
+    }
+
+    [Theory]
+    [InlineData("fatal", "deltaEq", "true")]
+    [InlineData("errorCode", "deltaGte", "\"1\"")]
+    public void V2RejectsBooleanAndStringDeltaOperators(string name, string operation, string value)
+    {
+        JsonObject root = ParseV2Root();
+        JsonObject metric = (JsonObject)((JsonArray)root["start"]!["predicates"]!)[1]!;
+        metric["name"] = name;
+        metric["operator"] = operation;
+        metric["value"] = JsonNode.Parse(value);
+        Assert.Throws<FormatException>(() => ScenarioParser.Parse(root.ToJsonString()));
+    }
+
+    [Fact]
+    public void V1SemanticsRejectV2FieldsAndResetPolicy()
+    {
+        JsonObject root = ParseRoot();
+        root["diagnosticsReset"] = "none";
+        Assert.Throws<FormatException>(() => ScenarioParser.Parse(root.ToJsonString()));
+
+        root = ParseRoot();
+        JsonObject game = (JsonObject)((JsonArray)root["start"]!["predicates"]!)[0]!;
+        game["field"] = "room";
+        game["equals"] = 9;
+        Assert.Throws<FormatException>(() => ScenarioParser.Parse(root.ToJsonString()));
+    }
+
     private static JsonObject ParseRoot() => JsonNode.Parse(Valid)!.AsObject();
+
+    private static JsonObject ParseV2Root() => JsonNode.Parse("""
+        {"schema":"sotn-scenario/2","id":"v2","version":"1","description":"v2 test","modId":"coop","timeoutMs":30000,"diagnosticsReset":"none","start":{"timeoutFrames":20,"predicates":[{"type":"game","field":"area","equals":0},{"type":"metric","schema":"p2d4/2","name":"attackContactNativeHits","operator":"gte","value":1}]},"steps":[{"id":"step","inputs":[{"port":0,"timeline":[{"buttons":[],"frames":1}]}],"checkpoint":{"timeoutFrames":20,"predicates":[{"type":"metric","schema":"p2d4/2","name":"fatal","operator":"eq","value":false}]}}],"artifacts":{"onFailure":[],"onSuccess":[]}}
+        """)!.AsObject();
 }

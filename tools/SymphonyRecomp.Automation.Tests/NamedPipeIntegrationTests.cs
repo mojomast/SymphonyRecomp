@@ -78,6 +78,28 @@ public sealed class NamedPipeIntegrationTests
         Assert.Equal(2, requestCount);
     }
 
+    [Fact]
+    public async Task OperationalRequestRejectsPreviousProtocolBeforeDispatch()
+    {
+        string pipeName = $"sotn-test-{Guid.NewGuid():N}";
+        const string token = "223456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0";
+        await using var client = new GameAutomationClient();
+        client.Configure(pipeName, token, static () => true);
+        Task server = ServeOneAsync(pipeName, request =>
+        {
+            Assert.Equal("bridge.status", request.Method);
+            var oldStatus = new BridgeStatusDto("1.1", true, 42, 7, "running", "Play", "NO0", 0, false);
+            return new AutomationResponse(request.Id, true,
+                System.Text.Json.JsonSerializer.SerializeToElement(oldStatus, AutomationProtocol.Json));
+        });
+
+        McpException error = await Assert.ThrowsAsync<McpException>(() =>
+            client.GetTelemetryAsync(CancellationToken.None));
+        await server;
+
+        Assert.Contains("unsupported automation protocol", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task ServeOneAsync(string pipeName, Func<AutomationRequest, AutomationResponse> respond)
     {
         await using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,

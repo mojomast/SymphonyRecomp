@@ -18,7 +18,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Scenarios\Catalog\coop-locomotion-jump.json"
-                      LogicalName="SymphonyRecomp.Mcp.Scenarios.Catalog.coop-locomotion-jump.json" />
+    <EmbeddedResource Include="Scenarios\Catalog\*.json"
+                      LogicalName="SymphonyRecomp.Mcp.Scenarios.Catalog.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Campaigns\Catalog\*.json"
+                      LogicalName="SymphonyRecomp.Mcp.Campaigns.Catalog.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

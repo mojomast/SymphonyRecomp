@@ -1,0 +1,5 @@
+# Handoff
+## Completed: Exact-owned attack lifetime enforcement and guaranteed minute-60 sampling
+## Next Task: Continue open M5 route, combat/drop, save/reload, post-retry terrain, and playable-soak gates
+## Context: M5 remains In progress. p2d4/2 now reports nonwrapping current and cumulative maximum exact-owned attack windows. Cleanup clears current but preserves maximum; successful diagnostic reset clears both. Soak rejects a cumulative maximum above the documented 40-window projectile lifecycle plus 8-window cleanup grace, while sampled stuck-marker handling remains. Crossing 3600 seconds explicitly captures and validates minute 60 once, requires exactly 13 samples, and still persists final evidence before Passed. Validation passed 149 parent tests, 244 co-op contracts, current/pinned 284672-byte compiles, zero-warning MCP, and host with five existing warnings. No live restart/test was requested or performed. Preserve prior live limitations: no cold-save, route, post-retry, or hour acceptance pass exists.
+## Files Modified: co-op attack lifetime runtime/metrics/tests/docs, parent strict metrics/campaign/tests/docs, devplan and handoff
