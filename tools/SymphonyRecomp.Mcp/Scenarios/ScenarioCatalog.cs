@@ -15,7 +15,7 @@ public sealed class ScenarioCatalog
     private static readonly ScenarioCatalogEntry[] StableDescriptors =
     [
         Entry(CoopLocomotionJumpId, CoopLocomotionJumpVersion),
-        Entry("coop-transition-west", "5"),
+        Entry("coop-transition-west", "6"),
         Entry("coop-contact-hit", "3"),
         Entry("coop-projectile-hit", "3"),
         Entry("coop-damage-revive", "3"),
