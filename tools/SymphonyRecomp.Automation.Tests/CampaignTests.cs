@@ -314,6 +314,41 @@ public sealed class CampaignTests
     }
 
     [Fact]
+    public async Task ToolPreservesExpectedPreflightFailureMessage()
+    {
+        using var temp = new TempDirectory();
+        var service = Service(temp.Path, new FakeClient { MalformedMetric = "missing" }, new FakeClock());
+        await using var process = new GameProcessManager();
+        await using var client = new GameAutomationClient();
+        var tools = new SotnTools(process, client, new ScenarioCatalog(),
+            new ScenarioExecutionService(new ScenarioAutomationClient(client, process), new SystemScenarioClock()),
+            new ScenarioExecutionGate(), service);
+
+        McpException exception = await Assert.ThrowsAsync<McpException>(() =>
+            tools.StartCampaign("coop-soak-60m", true, default));
+
+        Assert.Equal("Campaign diagnostics did not match p2d4/2.", exception.Message);
+    }
+
+    [Fact]
+    public async Task ToolHidesUnexpectedStartFailure()
+    {
+        using var temp = new TempDirectory();
+        var service = new CampaignService(new FakeClient(), new CampaignCatalog(), new ScenarioExecutionGate(),
+            new FakeClock(), temp.Path, () => throw new InvalidOperationException());
+        await using var process = new GameProcessManager();
+        await using var client = new GameAutomationClient();
+        var tools = new SotnTools(process, client, new ScenarioCatalog(),
+            new ScenarioExecutionService(new ScenarioAutomationClient(client, process), new SystemScenarioClock()),
+            new ScenarioExecutionGate(), service);
+
+        McpException exception = await Assert.ThrowsAsync<McpException>(() =>
+            tools.StartCampaign("coop-soak-60m", true, default));
+
+        Assert.Equal("Campaign start failed before observation began.", exception.Message);
+    }
+
+    [Fact]
     public async Task SoakRejectsAttackCounterRegression()
     {
         using var temp = new TempDirectory();

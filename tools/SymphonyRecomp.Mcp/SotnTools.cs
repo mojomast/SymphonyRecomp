@@ -207,6 +207,8 @@ public sealed partial class SotnTools
         try { return await campaigns.StartCampaignAsync(id, confirm, cancellationToken).ConfigureAwait(false); }
         catch (McpException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (CampaignService.CampaignFailure exception) { throw new McpException(exception.Message); }
+        catch (InvalidDataException exception) { throw new McpException(exception.Message); }
         catch { throw new McpException("Campaign start failed before observation began."); }
     }
 

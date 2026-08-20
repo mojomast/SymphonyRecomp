@@ -686,7 +686,7 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
         null, null, null, null, null, 0, "Idle", null, null, new(0, 0, null, null, null, 0, 0, 0, 0),
         null, null, new(false, false, false), null);
 
-    private sealed class CampaignFailure(string checkpoint, string message) : Exception(message)
+    internal sealed class CampaignFailure(string checkpoint, string message) : Exception(message)
     { public string Checkpoint { get; } = checkpoint; }
 
     private sealed class CampaignRun(string runId, CampaignDefinition definition, CampaignPreflight preflight,
