@@ -65,6 +65,20 @@ public sealed class CampaignTests
     }
 
     [Fact]
+    public async Task RouteAcceptsExpectedPerTransitionPixelResetBeforePostTransitionMovement()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient { Route = true, ResetsPostTransitionPixels = true };
+        var service = Service(temp.Path, client, new FakeClock());
+
+        await service.StartCampaignAsync("coop-route-25", true, default);
+        CampaignStatus result = await WaitTerminal(service);
+
+        Assert.Equal("Passed", result.Outcome);
+        Assert.Equal(25, result.Progress.Accepted);
+    }
+
+    [Fact]
     public async Task WrongRoutePreservesFirstFailureAndAlwaysUsesFreshCleanupToken()
     {
         using var temp = new TempDirectory();
@@ -390,6 +404,8 @@ public sealed class CampaignTests
         private int _transitions;
         private bool _preflightCaptured;
         private int _diagnosticCalls;
+        private int _pixelTransition = -1;
+        private int _pixelCaptures;
         public bool Route { get; init; }
         public int WrongTransition { get; init; } = -1;
         public int ChangeSessionAtTransition { get; init; } = -1;
@@ -406,6 +422,7 @@ public sealed class CampaignTests
         public string? MalformedMetric { get; init; }
         public bool RegressAttackCounter { get; init; }
         public bool OverlongAttackBetweenPolls { get; init; }
+        public bool ResetsPostTransitionPixels { get; init; }
         public int UnsafeTelemetryAtCall { get; init; } = -1;
         public bool BlockTelemetryAfterPreflight { get; init; }
         public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -433,7 +450,8 @@ public sealed class CampaignTests
             if (_allTelemetryCalls == ActivateInputAfterTelemetryCall) TelemetryInputActive = true;
             if (Route && _preflightCaptured)
             {
-                _transitions++;
+                if (!ResetsPostTransitionPixels || _pixelTransition != _transitions || _pixelCaptures != 1)
+                    _transitions++;
                 int index = _transitions % (Rooms.Length - 1);
                 room = WrongTransition == _transitions ? 77 : Rooms[index];
             }
@@ -456,10 +474,12 @@ public sealed class CampaignTests
             string session = ChangeSessionAtTransition == _transitions ? new string('f', 32) : Session;
             bool transient = _diagnosticCalls > 1 &&
                 (StuckAttack || _diagnosticCalls <= TransientAttackCaptures + 1);
+            long pixels = PostTransitionPixels(transitions);
+            bool moved = !ResetsPostTransitionPixels || transitions == 0 || pixels >= 8;
             var metrics = ScenarioMetricContract.Types.ToDictionary(pair => pair.Key, pair => pair.Value switch
             {
-                MetricScalarType.Integer => (object)MetricInteger(pair.Key, transitions, transient),
-                MetricScalarType.Boolean => MetricBoolean(pair.Key, transient),
+                MetricScalarType.Integer => (object)MetricInteger(pair.Key, transitions, transient, pixels),
+                MetricScalarType.Boolean => MetricBoolean(pair.Key, transient, moved),
                 MetricScalarType.String => "0",
                 _ => throw new InvalidOperationException(),
             }, StringComparer.Ordinal);
@@ -491,10 +511,23 @@ public sealed class CampaignTests
             return names.ToDictionary(name => name,
                 name => name == "VER" ? "0.4.0" : name == "K" ? "-" : "P", StringComparer.Ordinal);
         }
-        private long MetricInteger(string name, int transitions, bool transient) => name switch
+        private long PostTransitionPixels(int transitions)
+        {
+            if (!ResetsPostTransitionPixels) return transitions * 8L;
+            if (transitions == 0) return 8;
+            if (_pixelTransition != transitions)
+            {
+                _pixelTransition = transitions;
+                _pixelCaptures = 0;
+            }
+            _pixelCaptures++;
+            return _pixelCaptures == 1 ? 0 : 8;
+        }
+
+        private long MetricInteger(string name, int transitions, bool transient, long pixels) => name switch
         {
             "transitionPassed" or "transitionCompleted" or "reconstructionSuccesses" => transitions,
-            "postTransitionCommandedPixels" => transitions * 8L,
+            "postTransitionCommandedPixels" => pixels,
             "attackQuarantineSlot" => -1,
             "attackMarkerCount" => transient ? 1 : 0,
             "attackExactOwnedLifetimeMaximum" when OverlongAttackBetweenPolls && _diagnosticCalls > 1 => 49,
@@ -504,9 +537,9 @@ public sealed class CampaignTests
             "healthHp" => 100,
             _ => 0,
         };
-        private static bool MetricBoolean(string name, bool transient) => name switch
+        private static bool MetricBoolean(string name, bool transient, bool moved) => name switch
         {
-            "postTransitionMoved" => true,
+            "postTransitionMoved" => moved,
             "attackCleanupPending" => transient,
             _ => false,
         };

@@ -319,20 +319,19 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
                 long completedDelta = current.TransitionCompleted - baseline.TransitionCompleted;
                 long passedDelta = current.TransitionPassed - baseline.TransitionPassed;
                 long reconstructionDelta = current.ReconstructionSuccesses - baseline.ReconstructionSuccesses;
-                long movementDelta = current.PostTransitionCommandedPixels - baseline.PostTransitionCommandedPixels;
                 bool stablePlay = state.Game.Available && state.Game.State == "Play" && state.Game.Character == "Alucard" &&
                     !state.Game.Loading && !state.Game.MenuOpen && !state.Game.MapOpen;
                 bool accepted = stablePlay && completedDelta == 1 && passedDelta == 1 && reconstructionDelta >= 1 &&
-                    movementDelta >= 8 && current.PostTransitionMoved && !current.TransitionPending &&
+                    current.PostTransitionCommandedPixels >= 8 && current.PostTransitionMoved && !current.TransitionPending &&
                     !current.AwaitingPostTransitionMovement;
                 bool terminalMetricFailure = completedDelta > 1 || passedDelta > 1 || completedDelta < 0 ||
-                    passedDelta < 0 || reconstructionDelta < 0 || movementDelta < 0 ||
+                    passedDelta < 0 || reconstructionDelta < 0 ||
                     current.PostTransitionAbandonments != baseline.PostTransitionAbandonments ||
                     current.TransitionReconstructionFailures != baseline.TransitionReconstructionFailures ||
                     current.ReconstructionFailures != baseline.ReconstructionFailures;
                 if (terminalMetricFailure)
                     throw new CampaignFailure("transition-metrics",
-                        $"Transition metrics violated the exact route contract: completedDelta={completedDelta} passedDelta={passedDelta} reconstructionDelta={reconstructionDelta} movementDelta={movementDelta} abandonments={current.PostTransitionAbandonments - baseline.PostTransitionAbandonments} transitionReconstructionFailures={current.TransitionReconstructionFailures - baseline.TransitionReconstructionFailures} reconstructionFailures={current.ReconstructionFailures - baseline.ReconstructionFailures}.");
+                        $"Transition metrics violated the exact route contract: completedDelta={completedDelta} passedDelta={passedDelta} reconstructionDelta={reconstructionDelta} currentPixels={current.PostTransitionCommandedPixels} abandonments={current.PostTransitionAbandonments - baseline.PostTransitionAbandonments} transitionReconstructionFailures={current.TransitionReconstructionFailures - baseline.TransitionReconstructionFailures} reconstructionFailures={current.ReconstructionFailures - baseline.ReconstructionFailures}.");
                 if (accepted) break;
                 if ((_clock.Elapsed - settleStarted).TotalSeconds > 10)
                     throw new CampaignFailure("transition-metrics", "Transition metrics did not settle before the bounded deadline.");
