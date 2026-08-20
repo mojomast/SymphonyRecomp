@@ -331,7 +331,8 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
                     current.TransitionReconstructionFailures != baseline.TransitionReconstructionFailures ||
                     current.ReconstructionFailures != baseline.ReconstructionFailures;
                 if (terminalMetricFailure)
-                    throw new CampaignFailure("transition-metrics", "Transition metrics violated the exact route contract.");
+                    throw new CampaignFailure("transition-metrics",
+                        $"Transition metrics violated the exact route contract: completedDelta={completedDelta} passedDelta={passedDelta} reconstructionDelta={reconstructionDelta} movementDelta={movementDelta} abandonments={current.PostTransitionAbandonments - baseline.PostTransitionAbandonments} transitionReconstructionFailures={current.TransitionReconstructionFailures - baseline.TransitionReconstructionFailures} reconstructionFailures={current.ReconstructionFailures - baseline.ReconstructionFailures}.");
                 if (accepted) break;
                 if ((_clock.Elapsed - settleStarted).TotalSeconds > 10)
                     throw new CampaignFailure("transition-metrics", "Transition metrics did not settle before the bounded deadline.");
