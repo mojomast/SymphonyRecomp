@@ -95,15 +95,15 @@ public sealed class ScenarioCatalogTests
         }
 
         ScenarioDefinition transition = ScenarioParser.Parse(catalog.GetSource("coop-transition-west"));
-        Assert.Equal("4", transition.Version);
+        Assert.Equal("5", transition.Version);
         Assert.Contains("no more than 8 walkable world pixels", transition.Description);
         AssertGame(transition.Start, GamePredicateField.RoomX, integer: 32);
         AssertGame(transition.Start, GamePredicateField.RoomY, integer: 27);
         ScenarioStep step = Assert.Single(transition.Steps);
         ScenarioInput p1 = Assert.Single(step.Inputs, input => input.Port == 0);
         ScenarioInput p2 = Assert.Single(step.Inputs, input => input.Port == 1);
-        Assert.Equal(new[] { 8, 4, 108 }, p1.Timeline.Select(value => value.Frames));
-        Assert.Equal(new[] { 76, 8, 36 }, p2.Timeline.Select(value => value.Frames));
+        Assert.Equal(new[] { 8, 10, 50, 124 }, p1.Timeline.Select(value => value.Frames));
+        Assert.Equal(new[] { 120, 8, 64 }, p2.Timeline.Select(value => value.Frames));
         Assert.Equal((ushort)0x8000, p2.Timeline[1].Buttons);
         AssertMetric(step.Checkpoint, "postTransitionCommandedPixels", MetricOperator.DeltaGte);
         AssertMetric(step.Checkpoint, "postTransitionMoved", MetricOperator.Eq);
