@@ -314,6 +314,61 @@ public sealed class CampaignTests
     }
 
     [Fact]
+    public async Task CampaignAcceptsValidatedTransitionTrace()
+    {
+        using var temp = new TempDirectory();
+        var trace = new[]
+        {
+            new
+            {
+                frame = 100L, eventSource = 2, origin = TraceRoom(), current = TraceRoom(),
+                transitionPending = true, awaitingPostTransitionMovement = false,
+                reconstruction = "selected", retry = "none"
+            }
+        };
+        var service = Service(temp.Path, new FakeClient { TransitionTrace = trace }, new FakeClock());
+
+        await service.StartCampaignAsync("coop-soak-60m", true, default);
+
+        Assert.Equal("Passed", (await WaitTerminal(service)).Outcome);
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("oversized")]
+    [InlineData("unknown")]
+    public async Task CampaignRejectsMalformedOversizedOrUnknownTransitionTrace(string malformed)
+    {
+        using var temp = new TempDirectory();
+        object trace = malformed == "malformed"
+            ? new[] { new { frame = -1L } }
+            : malformed == "oversized"
+                ? Enumerable.Range(0, 25).Select(index => new
+                {
+                    frame = (long)index, eventSource = 2, origin = TraceRoom(), current = TraceRoom(),
+                    transitionPending = true, awaitingPostTransitionMovement = false,
+                    reconstruction = "selected", retry = "none"
+                }).ToArray()
+            : new[]
+            {
+                new
+                {
+                    frame = 100L, eventSource = 2,
+                    origin = new { stage = 40, area = 1, room = 140, left = -64, top = 128, right = 448,
+                        bottom = 608, unexpected = 0 },
+                    current = TraceRoom(),
+                    transitionPending = true, awaitingPostTransitionMovement = false,
+                    reconstruction = "selected", retry = "none"
+                }
+            };
+        var service = Service(temp.Path, new FakeClient { TransitionTrace = trace }, new FakeClock());
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.StartCampaignAsync("coop-soak-60m", true, default));
+        Assert.Equal("Idle", service.GetStatus().Outcome);
+    }
+
+    [Fact]
     public async Task ToolPreservesExpectedPreflightFailureMessage()
     {
         using var temp = new TempDirectory();
@@ -431,6 +486,17 @@ public sealed class CampaignTests
         new(client, new CampaignCatalog(), gate ?? new(), clock,
             root, () => $"campaign-test-{Guid.NewGuid():N}", writer);
 
+    private static object TraceRoom() => new
+    {
+        stage = 40,
+        area = 1,
+        room = 140,
+        left = -64,
+        top = 128,
+        right = 448,
+        bottom = 608
+    };
+
     private static async Task<CampaignStatus> WaitTerminal(CampaignService service)
     {
         for (int attempt = 0; attempt < 500; attempt++)
@@ -487,6 +553,7 @@ public sealed class CampaignTests
         public bool StuckAttack { get; init; }
         public int DiagnosticFrameAdvance { get; init; }
         public string? MalformedMetric { get; init; }
+        public object? TransitionTrace { get; init; }
         public bool RegressAttackCounter { get; init; }
         public bool OverlongAttackBetweenPolls { get; init; }
         public bool ResetsPostTransitionPixels { get; init; }
@@ -559,10 +626,11 @@ public sealed class CampaignTests
             {
                 schema = "p2d4/2", modVersion = "0.4.0", sessionId = session, generation = 0,
                 modFrame = _frame, automationFrame = MalformedMetric == "frame" ? _frame + 1 : _frame,
-                legacy = "P2D4 test",
-                fields = P2D4Fields(),
-                metrics
-            });
+                 legacy = "P2D4 test",
+                 fields = P2D4Fields(),
+                 metrics,
+                 transitionTrace = TransitionTrace
+             });
             if (MalformedMetric == "duplicate")
             {
                 string duplicated = payload.GetRawText().Replace("\"transitionPassed\":0",

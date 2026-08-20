@@ -19,8 +19,16 @@ internal sealed record P2D4Envelope(string Schema, IReadOnlyDictionary<string, s
 internal static class P2D4EnvelopeParser
 {
     public const int MaximumUtf8Bytes = 64 * 1024;
-    private static readonly string[] RootProperties =
+    private const int MaximumTransitionTraceEntries = 24;
+    private static readonly string[] RequiredRootProperties =
     ["schema", "modVersion", "sessionId", "generation", "modFrame", "automationFrame", "legacy", "fields", "metrics"];
+    private static readonly string[] AllowedRootProperties =
+    [.. RequiredRootProperties, "transitionTrace"];
+    private static readonly string[] TransitionTraceEntryProperties =
+    ["frame", "eventSource", "origin", "current", "transitionPending", "awaitingPostTransitionMovement",
+     "reconstruction", "retry"];
+    private static readonly string[] TransitionTraceRoomProperties =
+    ["stage", "area", "room", "left", "top", "right", "bottom"];
     private static readonly string[] FieldNames =
     ["VER", "H", "I", "K", "M", "R", "N", "B", "C", "T", "S", "G", "Q", "A", "E",
      "D", "VIS", "J", "X", "EN", "AW", "HU", "HP"];
@@ -34,7 +42,7 @@ internal static class P2D4EnvelopeParser
             throw Invalid("Diagnostic identity, payload type, or size is invalid.");
 
         JsonElement root = diagnostics.Payload;
-        RequireExactProperties(root, RootProperties, "envelope");
+        RequireProperties(root, RequiredRootProperties, AllowedRootProperties, "envelope");
         string schema = Printable(root.GetProperty("schema"), 32, false, "schema");
         if (schema != "p2d4/2") throw Invalid("Diagnostic schema must be exactly p2d4/2.");
         string modVersion = Printable(root.GetProperty("modVersion"), 64, false, "modVersion");
@@ -78,6 +86,9 @@ internal static class P2D4EnvelopeParser
         if (metrics.Count != ScenarioMetricContract.Types.Count)
             throw Invalid("Diagnostic metrics are incomplete.");
 
+        if (root.TryGetProperty("transitionTrace", out JsonElement transitionTrace))
+            ValidateTransitionTrace(transitionTrace);
+
         return new(schema, fields, metrics,
             new ScenarioDiagnosticIdentity(session, generation, frame, schema), modVersion, modFrame);
     }
@@ -93,11 +104,49 @@ internal static class P2D4EnvelopeParser
         _ => throw Invalid("Diagnostic metric must be an integer, boolean, or bounded printable string."),
     };
 
-    private static void RequireExactProperties(JsonElement value, string[] expected, string name)
+    private static void ValidateTransitionTrace(JsonElement trace)
+    {
+        if (trace.ValueKind == JsonValueKind.Null) return;
+        if (trace.ValueKind != JsonValueKind.Array || trace.GetArrayLength() > MaximumTransitionTraceEntries)
+            throw Invalid("Diagnostic transition trace must be a bounded array or null.");
+
+        foreach (JsonElement entry in trace.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object)
+                throw Invalid("Diagnostic transition trace entry must be an object.");
+            RequireProperties(entry, TransitionTraceEntryProperties, TransitionTraceEntryProperties,
+                "transition trace entry");
+            if (!entry.GetProperty("frame").TryGetInt64(out long frame) || frame < 0 ||
+                !entry.GetProperty("eventSource").TryGetByte(out byte source) || source > 5 ||
+                entry.GetProperty("transitionPending").ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                entry.GetProperty("awaitingPostTransitionMovement").ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw Invalid("Diagnostic transition trace entry scalar is invalid.");
+            ValidateTransitionTraceRoom(entry.GetProperty("origin"));
+            ValidateTransitionTraceRoom(entry.GetProperty("current"));
+            _ = Printable(entry.GetProperty("reconstruction"), 128, true, "transition trace reconstruction");
+            _ = Printable(entry.GetProperty("retry"), 128, true, "transition trace retry");
+        }
+    }
+
+    private static void ValidateTransitionTraceRoom(JsonElement room)
+    {
+        if (room.ValueKind != JsonValueKind.Object)
+            throw Invalid("Diagnostic transition trace room must be an object.");
+        RequireProperties(room, TransitionTraceRoomProperties, TransitionTraceRoomProperties,
+            "transition trace room");
+        if (!room.GetProperty("stage").TryGetByte(out _) || !room.GetProperty("area").TryGetByte(out _) ||
+            !room.GetProperty("room").TryGetByte(out _) || !room.GetProperty("left").TryGetInt32(out _) ||
+            !room.GetProperty("top").TryGetInt32(out _) || !room.GetProperty("right").TryGetInt32(out _) ||
+            !room.GetProperty("bottom").TryGetInt32(out _))
+            throw Invalid("Diagnostic transition trace room scalar is invalid.");
+    }
+
+    private static void RequireProperties(JsonElement value, string[] required, string[] allowed, string name)
     {
         string[] actual = value.EnumerateObject().Select(property => property.Name).ToArray();
-        if (actual.Length != expected.Length || actual.Distinct(StringComparer.Ordinal).Count() != actual.Length ||
-            actual.Except(expected, StringComparer.Ordinal).Any())
+        if (actual.Length < required.Length || actual.Distinct(StringComparer.Ordinal).Count() != actual.Length ||
+            actual.Except(allowed, StringComparer.Ordinal).Any() || required.Any(property => !actual.Contains(property,
+                StringComparer.Ordinal)))
             throw Invalid($"Diagnostic {name} property set is not exact.");
     }
 
