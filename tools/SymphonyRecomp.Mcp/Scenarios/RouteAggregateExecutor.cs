@@ -8,12 +8,14 @@ public sealed record RouteAggregateArtifact(string Schema, string DefinitionId, 
 
 // Parent-owned, game-free campaign input. The definition mirrors the checked-in co-op route
 // manifest and the executor accepts one bounded observation list, never paths or loop commands.
+// Route v2 uses live-observed telemetry room bytes: 140 is the NO0 lower clock-room junction and
+// 220 is the plain-door save room; the route alternates west/east across their shared doorway.
 public static class RouteAggregateCatalog
 {
-    public const string ManifestVersion = "coop-route/1|1";
-    public const string SequenceFingerprint = "34d38244074a0ea351c1374479cafa003bd1a21332e53554fbfba84e30591bac";
+    public const string ManifestVersion = "coop-route/1|2";
+    public const string SequenceFingerprint = "b1f6e989ccc0cc1484851761c2d8143d1891fafc494a04e1d6be024046f82896";
     public static RouteAggregateDefinition No0MarbleGallery25 { get; } = new(
-        "no0-marble-gallery-candidate-25", 25, [9, 10, 5, 6, 5, 10, 9, 19, 11, 19, 9]);
+        "no0-marble-gallery-candidate-25", 25, [140, 220, 140]);
 }
 
 public sealed class RouteAggregateExecutor

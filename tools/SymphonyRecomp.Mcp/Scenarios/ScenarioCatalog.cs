@@ -15,11 +15,11 @@ public sealed class ScenarioCatalog
     private static readonly ScenarioCatalogEntry[] StableDescriptors =
     [
         Entry(CoopLocomotionJumpId, CoopLocomotionJumpVersion),
-        Entry("coop-transition-west", "3"),
-        Entry("coop-contact-hit", "2"),
-        Entry("coop-projectile-hit", "2"),
-        Entry("coop-damage-revive", "2"),
-        Entry("coop-drop-observe", "1"),
+        Entry("coop-transition-west", "4"),
+        Entry("coop-contact-hit", "3"),
+        Entry("coop-projectile-hit", "3"),
+        Entry("coop-damage-revive", "3"),
+        Entry("coop-drop-observe", "2"),
     ];
 
     private readonly IReadOnlyDictionary<string, string> _sources;

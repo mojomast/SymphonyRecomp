@@ -4,12 +4,12 @@
   "version": "1",
   "kind": "route",
   "modId": "coop-feasibility",
-  "routeVersion": "no0-marble-gallery-candidate/1",
-  "routeFingerprint": "34d38244074a0ea351c1374479cafa003bd1a21332e53554fbfba84e30591bac",
+  "routeVersion": "no0-marble-gallery-candidate/2",
+  "routeFingerprint": "b1f6e989ccc0cc1484851761c2d8143d1891fafc494a04e1d6be024046f82896",
   "requiredTransitions": 25,
   "deadlineSeconds": 1800,
   "pollMilliseconds": 100,
   "stage": "MarbleGallery",
-  "area": 0,
-  "orderedRooms": [9, 10, 5, 6, 5, 10, 9, 19, 11, 19, 9]
+  "area": 40,
+  "orderedRooms": [140, 220, 140]
 }

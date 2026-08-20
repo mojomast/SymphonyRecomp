@@ -95,10 +95,10 @@ public sealed class ScenarioCatalogTests
         }
 
         ScenarioDefinition transition = ScenarioParser.Parse(catalog.GetSource("coop-transition-west"));
-        Assert.Equal("3", transition.Version);
+        Assert.Equal("4", transition.Version);
         Assert.Contains("no more than 8 walkable world pixels", transition.Description);
         AssertGame(transition.Start, GamePredicateField.RoomX, integer: 32);
-        AssertGame(transition.Start, GamePredicateField.RoomY, integer: 26);
+        AssertGame(transition.Start, GamePredicateField.RoomY, integer: 27);
         ScenarioStep step = Assert.Single(transition.Steps);
         ScenarioInput p1 = Assert.Single(step.Inputs, input => input.Port == 0);
         ScenarioInput p2 = Assert.Single(step.Inputs, input => input.Port == 1);

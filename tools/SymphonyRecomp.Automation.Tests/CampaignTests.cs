@@ -21,8 +21,8 @@ public sealed class CampaignTests
         CampaignDefinition route = catalog.Get("coop-route-25");
         Assert.Equal(25, route.RequiredTransitions);
         Assert.Equal(RouteAggregateCatalog.No0MarbleGallery25.OrderedRooms, route.OrderedRooms);
-        Assert.Equal("coop-route/1|1", RouteAggregateCatalog.ManifestVersion);
-        Assert.Equal("34d38244074a0ea351c1374479cafa003bd1a21332e53554fbfba84e30591bac",
+        Assert.Equal("coop-route/1|2", RouteAggregateCatalog.ManifestVersion);
+        Assert.Equal("b1f6e989ccc0cc1484851761c2d8143d1891fafc494a04e1d6be024046f82896",
             RouteAggregateCatalog.SequenceFingerprint);
         Assert.Throws<McpException>(() => catalog.Get("../route"));
         Assert.Throws<McpException>(() => catalog.Get("unknown"));
@@ -383,7 +383,7 @@ public sealed class CampaignTests
 
     private sealed class FakeClient : IScenarioAutomationClient
     {
-        private static readonly int[] Rooms = [9, 10, 5, 6, 5, 10, 9, 19, 11, 19, 9];
+        private static readonly int[] Rooms = [140, 220, 140];
         private long _frame = 100;
         private int _telemetryCalls;
         private int _allTelemetryCalls;
@@ -428,7 +428,7 @@ public sealed class CampaignTests
             }
             _allTelemetryCalls++;
             if (!FreezeFrames || _allTelemetryCalls == 1) _frame++;
-            int room = 9;
+            int room = 140;
             bool active = TelemetryInputActive;
             if (_allTelemetryCalls == ActivateInputAfterTelemetryCall) TelemetryInputActive = true;
             if (Route && _preflightCaptured)
@@ -444,7 +444,7 @@ public sealed class CampaignTests
                 active || TelemetryFramesActive ? 1 : 0, 0);
             bool unsafeSample = _allTelemetryCalls == UnsafeTelemetryAtCall;
             var game = new GameTelemetryDto(true, "Play", "Play", 1, 1, "Alucard", "MarbleGallery",
-                0, room, 0, 0, unsafeSample, false, false, 0, 0, null, input, null, null);
+                40, room, 0, 0, unsafeSample, false, false, 0, 0, null, input, null, null);
             return new CombinedTelemetryDto(runtime, game);
         }
         public Task<ModDiagnosticsDto> CaptureModDiagnosticsAsync(ModDiagnosticsCaptureRequest request, CancellationToken token)

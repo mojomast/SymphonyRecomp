@@ -83,12 +83,12 @@ public sealed class CampaignCatalog
                 if (roomsElement.ValueKind != JsonValueKind.Array) throw Invalid();
                 int[] rooms = roomsElement.EnumerateArray().Select(value => value.GetInt32()).ToArray();
                 if (id != "coop-route-25" || required != 25 || deadline is <= 0 or > 1800 ||
-                    Text(root, "routeVersion") != "no0-marble-gallery-candidate/1" ||
-                    Text(root, "stage") != "MarbleGallery" || Integer(root, "area") != 0 ||
+                    Text(root, "routeVersion") != "no0-marble-gallery-candidate/2" ||
+                    Text(root, "stage") != "MarbleGallery" || Integer(root, "area") != 40 ||
                     Text(root, "routeFingerprint") != RouteAggregateCatalog.SequenceFingerprint ||
                     !rooms.SequenceEqual(RouteAggregateCatalog.No0MarbleGallery25.OrderedRooms)) throw Invalid();
                 return new(id, version, kind, modId, Text(root, "routeVersion"), poll, deadline,
-                    required, "MarbleGallery", 0, Array.AsReadOnly(rooms), 0, 0, 0, 0);
+                    required, "MarbleGallery", 40, Array.AsReadOnly(rooms), 0, 0, 0, 0);
             }
             int seconds = Integer(root, "requiredSeconds"), interval = Integer(root, "sampleSeconds");
             int count = Integer(root, "sampleCount"), grace = Integer(root, "graceSeconds");

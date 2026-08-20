@@ -28,13 +28,13 @@ public sealed class RouteAggregateExecutorTests
         var executor = new RouteAggregateExecutor();
         RouteAggregateDefinition definition = RouteAggregateCatalog.No0MarbleGallery25;
         RouteAggregateArtifact failed = executor.Execute(definition,
-            [new(9, 10, true), new(10, 19, true), new(5, 6, true)]);
+            [new(140, 220, true), new(220, 52, true), new(140, 220, true)]);
         Assert.Equal("failed", failed.Outcome);
         Assert.Equal(1, failed.AcceptedObservations);
         Assert.Equal(1, failed.FailedObservation);
-        RouteAggregateArtifact incomplete = executor.Execute(definition, [new(9, 10, true)]);
+        RouteAggregateArtifact incomplete = executor.Execute(definition, [new(140, 220, true)]);
         Assert.Equal("incomplete", incomplete.Outcome);
-        Assert.Equal(10, incomplete.ExpectedFrom);
-        Assert.Equal(5, incomplete.ExpectedTo);
+        Assert.Equal(220, incomplete.ExpectedFrom);
+        Assert.Equal(140, incomplete.ExpectedTo);
     }
 }

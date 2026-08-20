@@ -207,7 +207,7 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
             requireQuiescentAttack: true);
         if (definition.Kind == CampaignKind.Route &&
             (state.Game.Stage != definition.Stage || state.Game.Area != definition.Area || state.Game.Room != definition.OrderedRooms[0]))
-            throw new McpException("Route campaign must start in MarbleGallery area 0 room 9.");
+            throw new McpException("Route campaign must start in MarbleGallery area 40 room 140.");
         ScenarioBuildIdentity build = await _client.GetBuildIdentityAsync(token).ConfigureAwait(false);
         return new(state, diagnostics, snapshot, mod.Version, build.McpInformationalVersion);
     }
@@ -299,7 +299,7 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
             ValidateBridge(await _client.GetBridgeStatusAsync(run.Cancellation.Token).ConfigureAwait(false));
             CombinedTelemetryDto state = await _client.GetTelemetryAsync(run.Cancellation.Token).ConfigureAwait(false);
             if (state.Game.Stage != run.Definition.Stage || state.Game.Area != run.Definition.Area)
-                throw new CampaignFailure("route", "The route left MarbleGallery area 0.");
+                throw new CampaignFailure("route", "The route left MarbleGallery area 40.");
             if (state.Game.Room == lastRoom) continue;
             int segment = observations.Count % (run.Definition.OrderedRooms.Count - 1);
             int expectedFrom = run.Definition.OrderedRooms[segment], expectedTo = run.Definition.OrderedRooms[segment + 1];
