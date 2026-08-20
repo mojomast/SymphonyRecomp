@@ -203,6 +203,7 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
         ModDiagnosticsDto diagnostics = await _client.CaptureModDiagnosticsAsync(
             new(TargetMod), token).ConfigureAwait(false);
         DiagnosticSnapshot snapshot = DiagnosticSnapshot.Parse(diagnostics);
+        if (definition.Id == "coop-route-25") ValidateRouteAdmission(snapshot);
         ValidateIdentityAndSafety(state, diagnostics, snapshot, null, requireSampleState: true,
             requireQuiescentAttack: true);
         if (definition.Kind == CampaignKind.Route &&
@@ -210,6 +211,15 @@ public sealed class CampaignService : IHostedService, IAsyncDisposable
             throw new McpException("Route campaign must start in MarbleGallery area 40 room 140.");
         ScenarioBuildIdentity build = await _client.GetBuildIdentityAsync(token).ConfigureAwait(false);
         return new(state, diagnostics, snapshot, mod.Version, build.McpInformationalVersion);
+    }
+
+    private static void ValidateRouteAdmission(DiagnosticSnapshot snapshot)
+    {
+        if (snapshot.TransitionPending || snapshot.AwaitingPostTransitionMovement ||
+            snapshot.TransitionCompleted != snapshot.TransitionPassed ||
+            snapshot.PostTransitionCommandedPixels < 8 || !snapshot.PostTransitionMoved ||
+            snapshot.Fatal || snapshot.ErrorCode != "0")
+            throw new McpException("Route campaign requires a settled, passed P2 post-transition state.");
     }
 
     private async Task ExecuteAsync(CampaignRun run)

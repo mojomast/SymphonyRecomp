@@ -78,6 +78,38 @@ public sealed class CampaignTests
         Assert.Equal(25, result.Progress.Accepted);
     }
 
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("awaiting")]
+    [InlineData("unbalanced")]
+    [InlineData("pixels")]
+    [InlineData("moved")]
+    [InlineData("fatal")]
+    [InlineData("error")]
+    public async Task RouteRejectsUnsafePreflightTransitionState(string state)
+    {
+        using var temp = new TempDirectory();
+        var service = Service(temp.Path, new FakeClient { Route = true, RoutePreflightState = state }, new FakeClock());
+
+        McpException exception = await Assert.ThrowsAsync<McpException>(() =>
+            service.StartCampaignAsync("coop-route-25", true, default));
+
+        Assert.Equal("Route campaign requires a settled, passed P2 post-transition state.", exception.Message);
+        Assert.Equal("Idle", service.GetStatus().Outcome);
+        Assert.Empty(Directory.GetFileSystemEntries(temp.Path));
+    }
+
+    [Fact]
+    public async Task RouteAcceptsSettledPreflightTransitionState()
+    {
+        using var temp = new TempDirectory();
+        var service = Service(temp.Path, new FakeClient { Route = true }, new FakeClock());
+
+        await service.StartCampaignAsync("coop-route-25", true, default);
+
+        Assert.Equal("Passed", (await WaitTerminal(service)).Outcome);
+    }
+
     [Fact]
     public async Task WrongRoutePreservesFirstFailureAndAlwaysUsesFreshCleanupToken()
     {
@@ -423,6 +455,7 @@ public sealed class CampaignTests
         public bool RegressAttackCounter { get; init; }
         public bool OverlongAttackBetweenPolls { get; init; }
         public bool ResetsPostTransitionPixels { get; init; }
+        public string? RoutePreflightState { get; init; }
         public int UnsafeTelemetryAtCall { get; init; } = -1;
         public bool BlockTelemetryAfterPreflight { get; init; }
         public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -480,7 +513,7 @@ public sealed class CampaignTests
             {
                 MetricScalarType.Integer => (object)MetricInteger(pair.Key, transitions, transient, pixels),
                 MetricScalarType.Boolean => MetricBoolean(pair.Key, transient, moved),
-                MetricScalarType.String => "0",
+                MetricScalarType.String => RoutePreflightState == "error" && _diagnosticCalls == 1 ? "1" : "0",
                 _ => throw new InvalidOperationException(),
             }, StringComparer.Ordinal);
             if (MalformedMetric == "missing") metrics.Remove("transitionPassed");
@@ -513,6 +546,7 @@ public sealed class CampaignTests
         }
         private long PostTransitionPixels(int transitions)
         {
+            if (Route && transitions == 0) return RoutePreflightState == "pixels" ? 7 : 8;
             if (!ResetsPostTransitionPixels) return transitions * 8L;
             if (transitions == 0) return 8;
             if (_pixelTransition != transitions)
@@ -526,7 +560,9 @@ public sealed class CampaignTests
 
         private long MetricInteger(string name, int transitions, bool transient, long pixels) => name switch
         {
-            "transitionPassed" or "transitionCompleted" or "reconstructionSuccesses" => transitions,
+            "transitionPassed" => Route ? transitions + 1 : transitions,
+            "transitionCompleted" when RoutePreflightState == "unbalanced" && _diagnosticCalls == 1 => transitions + 2,
+            "transitionCompleted" or "reconstructionSuccesses" => Route ? transitions + 1 : transitions,
             "postTransitionCommandedPixels" => pixels,
             "attackQuarantineSlot" => -1,
             "attackMarkerCount" => transient ? 1 : 0,
@@ -537,9 +573,12 @@ public sealed class CampaignTests
             "healthHp" => 100,
             _ => 0,
         };
-        private static bool MetricBoolean(string name, bool transient, bool moved) => name switch
+        private bool MetricBoolean(string name, bool transient, bool moved) => name switch
         {
-            "postTransitionMoved" => moved,
+            "transitionPending" => RoutePreflightState == "pending" && _diagnosticCalls == 1,
+            "awaitingPostTransitionMovement" => RoutePreflightState == "awaiting" && _diagnosticCalls == 1,
+            "postTransitionMoved" => RoutePreflightState != "moved" || _diagnosticCalls != 1 ? moved : false,
+            "fatal" => RoutePreflightState == "fatal" && _diagnosticCalls == 1,
             "attackCleanupPending" => transient,
             _ => false,
         };
