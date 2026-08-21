@@ -16,8 +16,8 @@ public sealed class ScenarioCatalog
     [
         Entry(CoopLocomotionJumpId, CoopLocomotionJumpVersion),
         Entry("coop-transition-west", "6"),
-        Entry("coop-contact-hit", "3"),
-        Entry("coop-projectile-hit", "3"),
+        Entry("coop-contact-hit", "4"),
+        Entry("coop-projectile-hit", "4"),
         Entry("coop-damage-revive", "3"),
         Entry("coop-drop-observe", "2"),
     ];

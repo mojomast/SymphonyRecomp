@@ -354,7 +354,14 @@ public sealed class ScenarioRunnerTests
         fake.Diagnostics.Enqueue(DiagnosticsV2(4, 7, values: new() { ["attackAllocations"] = 22 }));
         fake.Diagnostics.Enqueue(DiagnosticsV2(7, 7, values: new() { ["attackAllocations"] = 25 }));
 
-        Assert.Equal(ScenarioRunOutcome.Passed, (await Run(fake, scenario)).Outcome);
+        ScenarioRunResult result = await Run(fake, scenario);
+
+        Assert.Equal(ScenarioRunOutcome.Passed, result.Outcome);
+        Assert.Null(fake.ResetRequest);
+        Assert.DoesNotContain("reset", fake.Events);
+        Assert.Equal(7, result.InitialDiagnostics?.Generation);
+        Assert.Equal(7, result.PostResetDiagnostics?.Generation);
+        Assert.Equal(7, result.FinalDiagnostics?.Generation);
     }
 
     [Fact]

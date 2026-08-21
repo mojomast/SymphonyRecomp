@@ -91,7 +91,16 @@ public sealed class ScenarioCatalogTests
         foreach (string id in new[] { "coop-contact-hit", "coop-projectile-hit" })
         {
             ScenarioDefinition probe = ScenarioParser.Parse(catalog.GetSource(id));
+            Assert.Equal("4", probe.Version);
+            Assert.Equal(DiagnosticsResetPolicy.None, probe.DiagnosticsReset);
+            Assert.Contains("reset-none", probe.Description);
             AssertDiagnostic(probe.Start, "EN", result: DiagnosticResult.Pass);
+            AssertMetric(probe.Start, "attackCleanupPending", MetricOperator.Eq);
+            ScenarioStep combat = Assert.Single(probe.Steps);
+            AssertMetric(combat.Checkpoint, "attackCleanups", MetricOperator.DeltaEq);
+            AssertMetric(combat.Checkpoint, "attackFailures", MetricOperator.DeltaEq);
+            AssertMetric(combat.Checkpoint, "attackTimingFailures", MetricOperator.DeltaEq);
+            AssertMetric(combat.Checkpoint, "attackEquipmentRestoreFailures", MetricOperator.DeltaEq);
         }
 
         ScenarioDefinition transition = ScenarioParser.Parse(catalog.GetSource("coop-transition-west"));
