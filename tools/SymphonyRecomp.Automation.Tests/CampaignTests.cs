@@ -317,16 +317,22 @@ public sealed class CampaignTests
     public async Task CampaignAcceptsValidatedTransitionTrace()
     {
         using var temp = new TempDirectory();
-        var trace = new[]
+        Dictionary<string, object?>[] trace = Enumerable.Range(9, 6).Select(source =>
         {
-            new
-            {
-                frame = 100L, eventSource = 2, origin = TraceRoom(), current = TraceRoom(),
-                transitionPending = true, awaitingPostTransitionMovement = false,
-                reconstruction = "selected", retry = "none"
-            }
-        };
-        var service = Service(temp.Path, new FakeClient { TransitionTrace = trace }, new FakeClock());
+            Dictionary<string, object?> entry = TraceEntry(source);
+            entry["hookSequence"] = (long)source;
+            entry["bootstrapPhase"] = source % 5;
+            entry["reducerPhase"] = source % 9 + 1;
+            return entry;
+        }).ToArray();
+        trace[^1]["frame"] = long.MaxValue;
+        trace[^1]["hookSequence"] = long.MaxValue;
+        trace[^1]["bootstrapPhase"] = 4;
+        trace[^1]["layerStage"] = ushort.MaxValue;
+        trace[^1]["layerIndex"] = int.MinValue;
+        trace[^1]["reducerPhase"] = 9;
+        var service = Service(temp.Path, new FakeClient { TransitionTrace = trace },
+            new FakeClock { Advance = TimeSpan.FromMinutes(5) });
 
         await service.StartCampaignAsync("coop-soak-60m", true, default);
 
@@ -336,32 +342,49 @@ public sealed class CampaignTests
     [Theory]
     [InlineData("malformed")]
     [InlineData("oversized")]
-    [InlineData("unknown")]
+    [InlineData("unknownEntry")]
+    [InlineData("unknownRoom")]
+    [InlineData("overlongReconstruction")]
+    [InlineData("overlongRetry")]
     public async Task CampaignRejectsMalformedOversizedOrUnknownTransitionTrace(string malformed)
     {
         using var temp = new TempDirectory();
-        object trace = malformed == "malformed"
-            ? new[] { new { frame = -1L } }
-            : malformed == "oversized"
-                ? Enumerable.Range(0, 25).Select(index => new
-                {
-                    frame = (long)index, eventSource = 2, origin = TraceRoom(), current = TraceRoom(),
-                    transitionPending = true, awaitingPostTransitionMovement = false,
-                    reconstruction = "selected", retry = "none"
-                }).ToArray()
-            : new[]
-            {
-                new
-                {
-                    frame = 100L, eventSource = 2,
-                    origin = new { stage = 40, area = 1, room = 140, left = -64, top = 128, right = 448,
-                        bottom = 608, unexpected = 0 },
-                    current = TraceRoom(),
-                    transitionPending = true, awaitingPostTransitionMovement = false,
-                    reconstruction = "selected", retry = "none"
-                }
-            };
+        Dictionary<string, object?> entry = TraceEntry();
+        object trace = new[] { entry };
+        switch (malformed)
+        {
+            case "malformed": entry.Remove("hookSequence"); break;
+            case "oversized": trace = Enumerable.Range(0, 25).Select(_ => TraceEntry()).ToArray(); break;
+            case "unknownEntry": entry["unexpected"] = 0; break;
+            case "unknownRoom": ((Dictionary<string, object>)entry["origin"]!)["unexpected"] = 0; break;
+            case "overlongReconstruction": entry["reconstruction"] = new string('a', 129); break;
+            case "overlongRetry": entry["retry"] = new string('a', 129); break;
+        }
         var service = Service(temp.Path, new FakeClient { TransitionTrace = trace }, new FakeClock());
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.StartCampaignAsync("coop-soak-60m", true, default));
+        Assert.Equal("Idle", service.GetStatus().Outcome);
+    }
+
+    [Theory]
+    [InlineData("frame", -1L)]
+    [InlineData("hookSequence", -1L)]
+    [InlineData("eventSource", -1L)]
+    [InlineData("eventSource", 15L)]
+    [InlineData("bootstrapPhase", -1L)]
+    [InlineData("bootstrapPhase", 5L)]
+    [InlineData("layerStage", -2L)]
+    [InlineData("layerStage", 65536L)]
+    [InlineData("layerIndex", 2147483648L)]
+    [InlineData("reducerPhase", 0L)]
+    [InlineData("reducerPhase", 10L)]
+    public async Task CampaignRejectsOutOfRangeTransitionTraceScalars(string property, long value)
+    {
+        using var temp = new TempDirectory();
+        Dictionary<string, object?> entry = TraceEntry();
+        entry[property] = value;
+        var service = Service(temp.Path, new FakeClient { TransitionTrace = new[] { entry } }, new FakeClock());
 
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             service.StartCampaignAsync("coop-soak-60m", true, default));
@@ -486,15 +509,32 @@ public sealed class CampaignTests
         new(client, new CampaignCatalog(), gate ?? new(), clock,
             root, () => $"campaign-test-{Guid.NewGuid():N}", writer);
 
-    private static object TraceRoom() => new
+    private static Dictionary<string, object?> TraceEntry(int eventSource = 2) => new()
     {
-        stage = 40,
-        area = 1,
-        room = 140,
-        left = -64,
-        top = 128,
-        right = 448,
-        bottom = 608
+        ["frame"] = 100L,
+        ["hookSequence"] = 1L,
+        ["eventSource"] = eventSource,
+        ["origin"] = TraceRoom(),
+        ["current"] = TraceRoom(),
+        ["transitionPending"] = true,
+        ["awaitingPostTransitionMovement"] = false,
+        ["reconstruction"] = "selected",
+        ["retry"] = "none",
+        ["bootstrapPhase"] = 0,
+        ["layerStage"] = -1,
+        ["layerIndex"] = -1,
+        ["reducerPhase"] = 1
+    };
+
+    private static Dictionary<string, object> TraceRoom() => new()
+    {
+        ["stage"] = 40,
+        ["area"] = 1,
+        ["room"] = 140,
+        ["left"] = -64,
+        ["top"] = 128,
+        ["right"] = 448,
+        ["bottom"] = 608
     };
 
     private static async Task<CampaignStatus> WaitTerminal(CampaignService service)

@@ -25,8 +25,9 @@ internal static class P2D4EnvelopeParser
     private static readonly string[] AllowedRootProperties =
     [.. RequiredRootProperties, "transitionTrace"];
     private static readonly string[] TransitionTraceEntryProperties =
-    ["frame", "eventSource", "origin", "current", "transitionPending", "awaitingPostTransitionMovement",
-     "reconstruction", "retry"];
+    ["frame", "hookSequence", "eventSource", "origin", "current", "transitionPending",
+     "awaitingPostTransitionMovement", "reconstruction", "retry", "bootstrapPhase", "layerStage",
+     "layerIndex", "reducerPhase"];
     private static readonly string[] TransitionTraceRoomProperties =
     ["stage", "area", "room", "left", "top", "right", "bottom"];
     private static readonly string[] FieldNames =
@@ -117,7 +118,12 @@ internal static class P2D4EnvelopeParser
             RequireProperties(entry, TransitionTraceEntryProperties, TransitionTraceEntryProperties,
                 "transition trace entry");
             if (!entry.GetProperty("frame").TryGetInt64(out long frame) || frame < 0 ||
-                !entry.GetProperty("eventSource").TryGetByte(out byte source) || source > 5 ||
+                !entry.GetProperty("hookSequence").TryGetInt64(out long hookSequence) || hookSequence < 0 ||
+                !entry.GetProperty("eventSource").TryGetByte(out byte source) || source > 14 ||
+                !entry.GetProperty("bootstrapPhase").TryGetByte(out byte bootstrapPhase) || bootstrapPhase > 4 ||
+                !entry.GetProperty("layerStage").TryGetInt32(out int layerStage) || layerStage is < -1 or > ushort.MaxValue ||
+                !entry.GetProperty("layerIndex").TryGetInt32(out _) ||
+                !entry.GetProperty("reducerPhase").TryGetByte(out byte reducerPhase) || reducerPhase is < 1 or > 9 ||
                 entry.GetProperty("transitionPending").ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
                 entry.GetProperty("awaitingPostTransitionMovement").ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw Invalid("Diagnostic transition trace entry scalar is invalid.");
